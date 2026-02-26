@@ -11,3 +11,6 @@ __pycache__/
 
 # 忽略 models 文件夹
 models/
+
+# 忽略 test.py
+test.py
