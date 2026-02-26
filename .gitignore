@@ -1,0 +1,13 @@
+# 忽略整个 GPT-SoVITS 文件夹
+GPT-SoVITS/
+
+# 忽略日志和输出
+log/
+outputs/
+*.log
+
+# 忽略 Python 缓存
+__pycache__/
+
+# 忽略 models 文件夹
+models/
