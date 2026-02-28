@@ -34,7 +34,7 @@ SYSTEM_PROMPT = (
     "- lethe：“哈？你怎么还装上失忆了，自己家人都忘了？。”"
 )
 
-def speech():
+def speech_part():
     os.makedirs("log",exist_ok=True)
     logger=getLogger(log_name="main",log_path="log/speech.log")
     optimization_logger=getLogger(mode='w',log_name="optimization",log_path="log/optimization.log",stream=False)
