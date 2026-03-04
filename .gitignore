@@ -8,7 +8,6 @@ outputs/
 
 # 忽略 Python 缓存
 __pycache__/
-UI/__pycache__/
 
 # 忽略 models 文件夹
 models/
