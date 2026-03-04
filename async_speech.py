@@ -159,7 +159,6 @@ async def async_speech_part(asr_mode="out",silence_threshold=1.0):
         loop.run_until_complete(run_ap())
         loop.close()
 
-    
     try:
         api_thread=Thread(target=_api_thread,daemon=False)
         stream_thread=Thread(target=_stream_thread,daemon=False)
