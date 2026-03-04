@@ -1008,7 +1008,7 @@ QToolTip { color: #ffffff; background-color: rgba(33, 37, 43, 180); border-left:
                   <property name="minimumSize">
                    <size>
                     <width>0</width>
-                    <height>100000</height>
+                    <height>0</height>
                    </size>
                   </property>
                   <property name="styleSheet">
@@ -1042,7 +1042,7 @@ border: 1px solid rgb(44, 49, 58);</string>
                      <property name="minimumSize">
                       <size>
                        <width>0</width>
-                       <height>100</height>
+                       <height>0</height>
                       </size>
                      </property>
                      <property name="autoFillBackground">
@@ -1052,7 +1052,7 @@ border: 1px solid rgb(44, 49, 58);</string>
                       <string notr="true"/>
                      </property>
                      <property name="currentIndex">
-                      <number>3</number>
+                      <number>1</number>
                      </property>
                      <widget class="QWidget" name="home">
                       <property name="styleSheet">
@@ -1063,19 +1063,6 @@ border: 1px solid rgb(44, 49, 58);</string>
                       <property name="styleSheet">
                        <string notr="true"/>
                       </property>
-                      <widget class="QLabel" name="label_2">
-                       <property name="geometry">
-                        <rect>
-                         <x>0</x>
-                         <y>0</y>
-                         <width>111</width>
-                         <height>41</height>
-                        </rect>
-                       </property>
-                       <property name="text">
-                        <string>Setting</string>
-                       </property>
-                      </widget>
                      </widget>
                      <widget class="QWidget" name="setting">
                       <layout class="QVBoxLayout" name="verticalLayout_20"/>

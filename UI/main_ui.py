@@ -18,7 +18,7 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
     QMainWindow, QPushButton, QSizePolicy, QStackedWidget,
     QVBoxLayout, QWidget)
-import resources_rc
+import UI.resources_rc
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
@@ -427,7 +427,7 @@ class Ui_MainWindow(object):
         self.horizontalLayout_4.setContentsMargins(0, 0, 0, 0)
         self.pagesContainer = QFrame(self.content)
         self.pagesContainer.setObjectName(u"pagesContainer")
-        self.pagesContainer.setMinimumSize(QSize(0, 100000))
+        self.pagesContainer.setMinimumSize(QSize(0, 0))
         self.pagesContainer.setStyleSheet(u"background-color: rgb(40, 44, 52);\n"
 "border: 1px solid rgb(44, 49, 58);")
         self.pagesContainer.setFrameShape(QFrame.NoFrame)
@@ -438,7 +438,7 @@ class Ui_MainWindow(object):
         self.verticalLayout_15.setContentsMargins(0, 0, 10, 0)
         self.stackedWidget = QStackedWidget(self.pagesContainer)
         self.stackedWidget.setObjectName(u"stackedWidget")
-        self.stackedWidget.setMinimumSize(QSize(0, 100))
+        self.stackedWidget.setMinimumSize(QSize(0, 0))
         self.stackedWidget.setAutoFillBackground(False)
         self.stackedWidget.setStyleSheet(u"")
         self.home = QWidget()
@@ -448,9 +448,6 @@ class Ui_MainWindow(object):
         self.chat = QWidget()
         self.chat.setObjectName(u"chat")
         self.chat.setStyleSheet(u"")
-        self.label_2 = QLabel(self.chat)
-        self.label_2.setObjectName(u"label_2")
-        self.label_2.setGeometry(QRect(0, 0, 111, 41))
         self.stackedWidget.addWidget(self.chat)
         self.setting = QWidget()
         self.setting.setObjectName(u"setting")
@@ -607,7 +604,7 @@ class Ui_MainWindow(object):
 
         self.retranslateUi(MainWindow)
 
-        self.stackedWidget.setCurrentIndex(3)
+        self.stackedWidget.setCurrentIndex(1)
 
 
         QMetaObject.connectSlotsByName(MainWindow)
@@ -641,7 +638,6 @@ class Ui_MainWindow(object):
 #endif // QT_CONFIG(tooltip)
         self.closeAppBtn.setText("")
         self.content.setStyleSheet("")
-        self.label_2.setText(QCoreApplication.translate("MainWindow", u"Setting", None))
         self.btn_message.setText(QCoreApplication.translate("MainWindow", u"Message", None))
         self.btn_print.setText(QCoreApplication.translate("MainWindow", u"Print", None))
         self.btn_logout.setText(QCoreApplication.translate("MainWindow", u"Logout", None))

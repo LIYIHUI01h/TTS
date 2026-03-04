@@ -6,11 +6,11 @@ import asyncio
 import datetime
 import psutil
 import aiofiles
-from PySide6.QtCore import QEvent, QEasingCurve, QPointF, Qt, QPropertyAnimation, QPoint, QRect, QSize, QVariantAnimation
+from PySide6.QtCore import QEvent, QEasingCurve, QPointF, QTimer, Qt, QPropertyAnimation, QPoint, QRect, QSize, QVariantAnimation
 from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QApplication, QComboBox, QMainWindow, QProgressBar, QSizeGrip, QPushButton, QSlider, QSplitter, QTextEdit, QWidget
+from PySide6.QtWidgets import QApplication, QComboBox, QMainWindow, QProgressBar, QSizeGrip, QPushButton, QSlider, QSplitter, QStackedLayout, QTextEdit, QWidget
 from qasync import QEventLoop, asyncSlot
-from main_ui import QFrame, QHBoxLayout, QLabel, QVBoxLayout, Ui_MainWindow 
+from UI.main_ui import QFrame, QHBoxLayout, QLabel, QVBoxLayout, Ui_MainWindow 
 
 class ToastNotification(QWidget):
     def __init__(self, parent, message, color="#87CEFA"):
@@ -18,7 +18,6 @@ class ToastNotification(QWidget):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.ToolTip)
         self.setAttribute(Qt.WA_TranslucentBackground)
         
-        # 布局
         layout = QHBoxLayout(self)
         self.label = QLabel(message)
         self.label.setStyleSheet(f"""
@@ -34,16 +33,13 @@ class ToastNotification(QWidget):
         """)
         layout.addWidget(self.label)
         
-        # 初始位置：主窗口右上角
         self.adjustSize()
         parent_rect = parent.geometry()
         self.move(parent_rect.right() - self.width() - 20, parent_rect.top() + 60)
 
-        # 动画：淡入淡出
         self.opacity_ani = QPropertyAnimation(self, b"windowOpacity")
         self.opacity_ani.setDuration(500)
         
-        # 启动显示
         self.show_toast()
 
     def show_toast(self):
@@ -53,7 +49,6 @@ class ToastNotification(QWidget):
         self.opacity_ani.setEndValue(0.9)
         self.opacity_ani.start()
         
-        # 3秒后自动淡出并销毁
         asyncio.get_event_loop().call_later(3, self.hide_toast)
 
     def hide_toast(self):
@@ -97,10 +92,121 @@ class HomePage(BasePage):
         label.setStyleSheet("color: #888; font-size: 14px;")
         self.container_layout.addWidget(label, alignment=Qt.AlignTop)
 
-class ChatPage(BasePage):
+class ChatPage(QWidget):
     def __init__(self):
-        super().__init__("AI CHAT", "智能对话交互终端")
-        self.container.setStyleSheet("background: rgba(0, 0, 0, 20); border-radius: 10px;")
+        super().__init__()
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+
+        self.splitter = QSplitter(Qt.Vertical)
+        self.splitter.setHandleWidth(1)
+        self.splitter.setStyleSheet("QSplitter::handle { background: #2c313c; }")
+
+        self.unity_area = QFrame()
+        self.unity_area.setStyleSheet("background-color: #050505; border: none;")
+        u_layout = QVBoxLayout(self.unity_area)
+        u_layout.setContentsMargins(0, 0, 0, 0)
+        self.u_label = QLabel("Unity Rendering Area")
+        self.u_label.setAlignment(Qt.AlignCenter)
+        self.u_label.setStyleSheet("color: #333; font-weight: bold;")
+        u_layout.addWidget(self.u_label)
+
+        self.input_container = QFrame()
+        self.input_container.setStyleSheet("background-color: #1d2127; border-top: 1px solid #2c313c;")
+        
+        self.h_layout = QHBoxLayout(self.input_container)
+        self.h_layout.setContentsMargins(10, 5, 10, 5)
+        self.h_layout.setSpacing(10)
+
+        self.chat_input = QTextEdit()
+        self.chat_input.setPlaceholderText("在此输入... (Enter 发送)")
+        self.chat_input.setMinimumHeight(0)
+        self.chat_input.setStyleSheet("""
+            QTextEdit { 
+                background: #16191d; 
+                border: 1px solid #2c313c; 
+                color: white; 
+                font-family: 'Segoe UI', 'Microsoft YaHei';
+                font-size: 14px;
+                padding: 5px;
+                border-radius: 4px;
+            }
+        """)
+        self.chat_input.installEventFilter(self)
+        self.h_layout.addWidget(self.chat_input)
+
+        self.mode_btn = QPushButton("🎤")
+        self.mode_btn.setFixedSize(34, 34)
+        self.mode_btn.setCursor(Qt.PointingHandCursor)
+        self.mode_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3e4451;
+                color: white;
+                border-radius: 17px;
+                border: 1px solid #565f73;
+                font-size: 16px;
+            }
+            QPushButton:hover { background-color: #bd93f9; }
+        """)
+        self.mode_btn.clicked.connect(self.toggle_mode)
+        self.h_layout.addWidget(self.mode_btn, 0, Qt.AlignVCenter)
+
+        self.splitter.addWidget(self.unity_area)
+        self.splitter.addWidget(self.input_container)
+        self.splitter.setCollapsible(0, True)
+        self.splitter.setCollapsible(1, True)
+
+        self.main_layout.addWidget(self.splitter)
+        
+        self.is_voice_mode = False
+
+        self.interpt=False
+        self.is_geted=True
+        self.text=""
+
+    def toggle_mode(self):
+        """切换语音/文本模式"""
+        self.is_voice_mode = not self.is_voice_mode
+        if self.is_voice_mode:
+            self.mode_btn.setText("⌨️")
+            self.chat_input.setReadOnly(True)
+            self.chat_input.setPlainText("语音识别模式(']'键退出): 准备就绪，请说话...")
+            self.chat_input.setStyleSheet(self.chat_input.styleSheet().replace("color: white;", "color: #87CEFA;"))
+        else:
+            self.mode_btn.setText("🎤")
+            self.chat_input.setReadOnly(False)
+            self.chat_input.clear()
+            self.chat_input.setStyleSheet(self.chat_input.styleSheet().replace("color: #87CEFA;", "color: white;"))
+
+    def eventFilter(self, obj, event):
+        if obj is self.chat_input and event.type() == QEvent.KeyPress and self.is_geted:
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                if event.modifiers() & Qt.ControlModifier:
+                    self.chat_input.insertPlainText("\n")
+                else:
+                    self.send_message()
+                return True
+        return super().eventFilter(obj, event)
+
+    def send_message(self):
+        if self.is_voice_mode: return
+        content = self.chat_input.toPlainText().strip()
+        if content:
+            self.chat_input.clear()
+            self.text=content
+            self.is_geted=False
+
+
+    def showEvent(self, event):
+        """窗口显示时，强制设定底部高度"""
+        super().showEvent(event)
+        QTimer.singleShot(50, self._set_initial_size)
+
+    def _set_initial_size(self):
+        total_h = self.height()
+        default_input_h = 50 
+        self.splitter.setSizes([total_h - default_input_h, default_input_h])
 
 class LogPage(BasePage):
     def __init__(self):
@@ -555,11 +661,17 @@ class MyWindow(QMainWindow, Ui_MainWindow):
 
         self.stackedWidget.setCurrentIndex(0)
 
-        self.closeAppBtn.clicked.connect(self.close)
+        self.closeAppBtn.clicked.connect(self._shutdown)
         self.maximizeRestoreAppBtn.clicked.connect(self.toggle_maximize)
         self.minimizeAppBtn.clicked.connect(self.showMinimized)
 
         self.notify("初始化成功")
+        self.DOING=True
+
+    def _shutdown(self):
+        self.DOING=False
+        self.shutdown()
+        self.close()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -632,12 +744,12 @@ class MyWindow(QMainWindow, Ui_MainWindow):
         }
         ToastNotification(self, message, colors.get(level, "#87CEFA"))
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    loop = QEventLoop(app)
-    asyncio.set_event_loop(loop)
-
-    window = MyWindow()
-    window.show()
-
-    with loop: loop.run_forever()
+# if __name__ == "__main__":
+#     app = QApplication(sys.argv)
+#     loop = QEventLoop(app)
+#     asyncio.set_event_loop(loop) 
+    
+#     with loop:
+#         window = MyWindow()
+#         window.show()
+#         loop.run_forever() 
