@@ -61,11 +61,28 @@ async def async_speech_part(window,asr_mode="out",silence_threshold=1.0):
         "audioplayer_count":0,
         "audioplay_done":True,
         "session_id":0,
-        "interpt":False,
         "api_loop":None,
         "api_task":None,
         "last_audio_done":time()
     }
+
+    def do_interpt():
+        flags["session_id"]+=1
+        if flags["api_task"] and flags["api_loop"]:
+            try:
+                flags["api_loop"].call_soon_threadsafe(flags["api_task"].cancel)
+            except:
+                pass
+            logger.info("api任务被打断")
+        ap.stop()
+        flags["audioplay_done"]=True
+        while not api_que.empty(): 
+            try: api_que.get_nowait()
+            except: break
+        while not future_que.empty(): 
+            try: future_que.get_nowait()
+            except: break
+        logger.info("打断完成")
 
     def _api_thread():
         loop=asyncio.new_event_loop()
@@ -92,7 +109,7 @@ async def async_speech_part(window,asr_mode="out",silence_threshold=1.0):
 
                 try:
                     async for output in flags["api_task"]:
-                        print(output)
+                        logger.info(f"api输出{output}")
                         if session_id!=flags["session_id"]:
                             flags["api_task"].cancel()
                             break
@@ -105,6 +122,7 @@ async def async_speech_part(window,asr_mode="out",silence_threshold=1.0):
                 finally:
                     flags["api_task"]=None
                     api_que.put_nowait(None)
+
         loop.run_until_complete(run_api())
         loop.close()
 
@@ -142,7 +160,7 @@ async def async_speech_part(window,asr_mode="out",silence_threshold=1.0):
         async def run_ap():
             last=None
             while True:
-                pii=await loop.run_in_executor(None,future_que.get)
+                pii=await loop.run_in_executor(None,future_que.get) 
                 if last is None:last=time()
                 if pii==SHUTDOWN: break
                 elif pii is None:
@@ -176,16 +194,18 @@ async def async_speech_part(window,asr_mode="out",silence_threshold=1.0):
             if window.stackedWidget.currentIndex()==1:
                 if window.page_chat.is_voice_mode:
                     window.page_chat.can_change=False
-                    async for text in asr.start(mode=asr_mode):
+                    asr_task=await asr.start(mode=asr_mode,window=window)
+                    async for text in asr_task:
                         if asr_last:
                             optimization_logger.info(f"asr首次响应耗时{time()-asr_last:.2f}")
                             asr_last=None       
                         if not flags["audioplay_done"]:print("当前对话还未结束，无法处理当前语音") 
 
-                        if flags["audioplay_done"] or flags["interpt"]:
-                            if time()-flags["last_audio_done"]<silence_threshold: continue
-                            else: logger.info(text) 
-                            flags["interpt"]=False
+                        if flags["audioplay_done"]:
+                            if time()-flags["last_audio_done"] < silence_threshold: continue
+                            else: 
+                                logger.info(text)
+                                window.page_chat.chat_input.setPlainText(f"语音识别模式: {text}")
                             flags["session_id"]+=1
                             logger.info(f"会话{flags['session_id']}开始")
                             text_que.put_nowait((flags["session_id"],text))
@@ -193,22 +213,16 @@ async def async_speech_part(window,asr_mode="out",silence_threshold=1.0):
 
                         elif any(word in text for word in interpts) or window.page_chat.interpt:
                             window.page_chat.interpt=False
-                            flags["session_id"]+=1
-                            flags["interpt"]=True
-                            if flags["api_task"] and flags["api_loop"]:
-                                flags["api_loop"].call_soon_threadsafe(flags["api_task"].cancel)
-                                logger.info("api任务被打断")
-                            ap.stop()
-                            while not api_que.empty(): 
-                                try: api_que.get_nowait()
-                                except: break
-                            while not future_que.empty(): 
-                                try: future_que.get_nowait()
-                                except: break
-                        if flags["audioplay_done"] or flags["interpt"]: window.page_chat.chat_input.setPlainText("语音识别模式(']'键退出): 准备就绪，请说话...")
+                            do_interpt()
+                        if flags["audioplay_done"]: window.page_chat.chat_input.setPlainText("语音识别模式(']'键退出): 准备就绪，请说话...")
+                        await asyncio.sleep(0.5)
+
+                    if asr.interpt:
+                        asr.interpt=False
 
                     while True:
-                        if flags["audioplay_done"] or flags["interpt"]:
+                        print(1)
+                        if flags["audioplay_done"]  or window.page_chat.interpt:
                             window.page_chat.can_change=True
                             break
                         else: await asyncio.sleep(1)
@@ -217,26 +231,27 @@ async def async_speech_part(window,asr_mode="out",silence_threshold=1.0):
                         window.page_chat.can_change=False
                         window.page_chat.is_geted=True
                         text=window.page_chat.text
-                        flags["interpt"]=False
                         flags["session_id"]+=1
                         logger.info(f"会话{flags['session_id']}开始")
                         text_que.put_nowait((flags["session_id"],text))
                         flags["audioplay_done"]=False
+                    elif window.page_chat.interpt:
+                        window.page_chat.interpt=False
+                        do_interpt()
+                        
                     else: await asyncio.sleep(2)
 
                     while True:
-                        if flags["audioplay_done"] or window.page_chat.interpt:
+                        if  (flags["audioplay_done"] or window.page_chat.interpt):
                             window.page_chat.can_change=True
                             break
                         else: await asyncio.sleep(1)
             else:await asyncio.sleep(2)
     finally:
         logger.info("启动清理程序...")
-        
         text_que.put_nowait(SHUTDOWN)
         tts_executor.shutdown(wait=False)
         kill()
-
 
 if __name__ == "__main__":
     app = QApplication([])
@@ -253,5 +268,3 @@ if __name__ == "__main__":
     text_que.put_nowait(SHUTDOWN)
     tts_executor.shutdown(wait=False)
     kill()
-    
-    

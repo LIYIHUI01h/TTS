@@ -7,7 +7,7 @@ import datetime
 import psutil
 import aiofiles
 from PySide6.QtCore import QEvent, QEasingCurve, QPointF, QTimer, Qt, QPropertyAnimation, QPoint, QRect, QSize, QVariantAnimation
-from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QTextCursor
 from PySide6.QtWidgets import QApplication, QComboBox, QMainWindow, QProgressBar, QSizeGrip, QPushButton, QSlider, QSplitter, QStackedLayout, QTextEdit, QWidget
 from qasync import QEventLoop, asyncSlot
 from UI.main_ui import QFrame, QHBoxLayout, QLabel, QVBoxLayout, Ui_MainWindow 
@@ -160,18 +160,36 @@ class ChatPage(QWidget):
         self.main_layout.addWidget(self.splitter)
         
         self.is_voice_mode = False
+        self.can_change = True
+        self.interpt = False
+        self.is_geted = True
+        self.text = ""
 
-        self.interpt=False
-        self.is_geted=True
-        self.text=""
+        self.style_timer = QTimer(self)
+        self.style_timer.timeout.connect(self._update_ui_state)
+        self.style_timer.start(100)
+
+    def _update_ui_state(self):
+        if not self.can_change:
+            self.mode_btn.setText("⏹️")
+            if "background-color: #ff5555" not in self.mode_btn.styleSheet():
+                self.mode_btn.setStyleSheet(self.mode_btn.styleSheet().replace("#3e4451", "#ff5555"))
+        else:
+            icon = "⌨️" if self.is_voice_mode else "🎤"
+            self.mode_btn.setText(icon)
+            if "background-color: #3e4451" not in self.mode_btn.styleSheet():
+                self.mode_btn.setStyleSheet(self.mode_btn.styleSheet().replace("#ff5555", "#3e4451"))
 
     def toggle_mode(self):
-        """切换语音/文本模式"""
+        if not self.can_change:
+            self.interpt = True
+            self.is_voice_mode=True
+
         self.is_voice_mode = not self.is_voice_mode
         if self.is_voice_mode:
             self.mode_btn.setText("⌨️")
             self.chat_input.setReadOnly(True)
-            self.chat_input.setPlainText("语音识别模式(']'键退出): 准备就绪，请说话...")
+            self.chat_input.setPlainText("语音识别模式: 准备就绪，请说话...")
             self.chat_input.setStyleSheet(self.chat_input.styleSheet().replace("color: white;", "color: #87CEFA;"))
         else:
             self.mode_btn.setText("🎤")
@@ -180,26 +198,25 @@ class ChatPage(QWidget):
             self.chat_input.setStyleSheet(self.chat_input.styleSheet().replace("color: #87CEFA;", "color: white;"))
 
     def eventFilter(self, obj, event):
-        if obj is self.chat_input and event.type() == QEvent.KeyPress and self.is_geted:
+        if obj is self.chat_input and event.type() == QEvent.KeyPress:
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
                 if event.modifiers() & Qt.ControlModifier:
                     self.chat_input.insertPlainText("\n")
-                else:
+                elif self.can_change and self.is_geted:
                     self.send_message()
                 return True
         return super().eventFilter(obj, event)
 
     def send_message(self):
-        if self.is_voice_mode: return
+        if self.is_voice_mode or not self.can_change: 
+            return
         content = self.chat_input.toPlainText().strip()
         if content:
+            self.text = content
             self.chat_input.clear()
-            self.text=content
-            self.is_geted=False
-
+            self.is_geted = False
 
     def showEvent(self, event):
-        """窗口显示时，强制设定底部高度"""
         super().showEvent(event)
         QTimer.singleShot(50, self._set_initial_size)
 
@@ -216,7 +233,6 @@ class LogPage(BasePage):
         self.viewers = [] 
 
         sub_title_label = self.layout.itemAt(1).widget() 
-        
         self.sub_header_row = QHBoxLayout()
         self.sub_header_row.setContentsMargins(0, 0, 0, 0)
         self.sub_header_row.addWidget(sub_title_label)
@@ -251,38 +267,64 @@ class LogPage(BasePage):
         self.del_view_btn.clicked.connect(self.remove_viewer)
 
         self.add_viewer()
-        asyncio.ensure_future(self.auto_refresh())
+        asyncio.ensure_future(self.update_logs_loop())
 
-    async def auto_refresh(self):
+    async def update_logs_loop(self):
+        """效仿 MonitorPage 的 update_stats 逻辑"""
         while True:
-            if hasattr(self, 'stackedWidget') and self.stackedWidget.currentWidget() == self:
-                await self.refresh_logs()
+            try:
+                if self.window() and hasattr(self.window(), 'stackedWidget'):
+                    main_active = self.window().stackedWidget.currentWidget() == self
+                else:
+                    main_active = self.isVisible()
+
+                if main_active:
+                    await self.refresh_all_viewers()
+                    
+            except Exception as e:
+                print(f"Log Update Error: {e}")
+            
             await asyncio.sleep(2)
 
-    async def refresh_logs(self):
-        tasks=[]
-        for viewer in self.viewers:
+    async def refresh_all_viewers(self):
+        """遍历所有分屏并更新"""
+        tasks = []
+        for viewer in list(self.viewers):
             selector = viewer.findChild(QComboBox)
             display = viewer.findChild(QTextEdit)
             if selector and display:
-                tasks.append(self.load_log_async(selector.currentText(), display))
-        if tasks: await asyncio.gather(*tasks)
+                filename = selector.currentText()
+                if filename and filename != "目录不存在":
+                    tasks.append(self.load_log_async(filename, display))
+        
+        if tasks:
+            await asyncio.gather(*tasks)
 
     @asyncSlot()
-    async def load_log_async(self,filename,display_widget):
-        if not filename or filename=="目录不存在":return
+    async def load_log_async(self, filename, display_widget):
+        """高效读取文件并更新 UI"""
         full_path = os.path.join(self.log_dir, filename)
-    
-        async with aiofiles.open(full_path, mode='r', encoding='utf-8', errors='ignore') as f:
-            lines = await f.readlines()
-            content = "".join(lines[-1000:])
-        
-        if display_widget.toPlainText() != content:
-            v_bar = display_widget.verticalScrollBar()
-            at_bottom = v_bar.value() >= v_bar.maximum() - 20
-            display_widget.setPlainText(content)
-            if at_bottom:
-                v_bar.setValue(v_bar.maximum())
+        if not os.path.exists(full_path):
+            return
+
+        try:
+            async with aiofiles.open(full_path, mode='r', encoding='utf-8', errors='ignore') as f:
+                await f.seek(0, os.SEEK_END)
+                file_size = await f.tell()
+                read_pos = max(0, file_size - 30000)
+                await f.seek(read_pos)
+                content = await f.read()
+
+            if display_widget.toPlainText() != content:
+                v_bar = display_widget.verticalScrollBar()
+                at_bottom = v_bar.value() >= v_bar.maximum() - 50
+                
+                display_widget.setPlainText(content)
+                
+                if at_bottom:
+                    display_widget.moveCursor(QTextCursor.End)
+        except Exception as e:
+            print(f"Read File Error ({filename}): {e}")
 
     def add_viewer(self):
         if len(self.viewers) >= 3:
@@ -295,7 +337,7 @@ class LogPage(BasePage):
         file_selector = QComboBox()
         file_selector.setStyleSheet("""
             QComboBox { background: #1d2127; border: 1px solid #2c313c; padding: 5px; color: #87CEFA; }
-            QComboBox QAbstractItemView { background: #1d2127; selection-background-color: #bd93f9; }
+            QComboBox QAbstractItemView { background: #1d2127; selection-background-color: #bd93f9; color: white; }
         """)
         self.refresh_files(file_selector)
         
@@ -303,10 +345,8 @@ class LogPage(BasePage):
         display.setReadOnly(True)
         display.setStyleSheet("""
             QTextEdit {
-                background-color: #1d2127; 
-                border: 1px solid #2c313c;
-                border-bottom-left-radius: 8px; 
-                border-bottom-right-radius: 8px;
+                background-color: #16191d; color: #abb2bf; font-family: 'Consolas', 'Monaco';
+                border: 1px solid #2c313c; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;
             }
         """)
 
@@ -329,12 +369,15 @@ class LogPage(BasePage):
 
     def remove_viewer(self):
         if len(self.viewers) > 1:
-            self.viewers.pop().deleteLater()
+            viewer = self.viewers.pop()
+            viewer.setParent(None)
+            viewer.deleteLater()
 
     def refresh_files(self, combo_box):
         combo_box.clear()
         if os.path.exists(self.log_dir):
             files = [f for f in os.listdir(self.log_dir) if f.endswith(('.log', '.txt'))]
+            files.sort(reverse=True)
             combo_box.addItems(files)
         else:
             combo_box.addItem("目录不存在")
