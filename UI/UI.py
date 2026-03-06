@@ -160,9 +160,9 @@ class ChatPage(QWidget):
         self.main_layout.addWidget(self.splitter)
         
         self.is_voice_mode = False
-        self.can_change = True
-        self.interpt = False
-        self.is_geted = True
+        self.forbid_change = asyncio.Event()
+        self.interpt = asyncio.Event()
+        self.wait_for_get = asyncio.Event()
         self.text = ""
 
         self.style_timer = QTimer(self)
@@ -170,7 +170,7 @@ class ChatPage(QWidget):
         self.style_timer.start(100)
 
     def _update_ui_state(self):
-        if not self.can_change:
+        if self.forbid_change.is_set():
             self.mode_btn.setText("⏹️")
             if "background-color: #ff5555" not in self.mode_btn.styleSheet():
                 self.mode_btn.setStyleSheet(self.mode_btn.styleSheet().replace("#3e4451", "#ff5555"))
@@ -181,8 +181,8 @@ class ChatPage(QWidget):
                 self.mode_btn.setStyleSheet(self.mode_btn.styleSheet().replace("#ff5555", "#3e4451"))
 
     def toggle_mode(self):
-        if not self.can_change:
-            self.interpt = True
+        if self.forbid_change.is_set():
+            self.interpt.set()
             self.is_voice_mode=True
 
         self.is_voice_mode = not self.is_voice_mode
@@ -202,19 +202,19 @@ class ChatPage(QWidget):
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
                 if event.modifiers() & Qt.ControlModifier:
                     self.chat_input.insertPlainText("\n")
-                elif self.can_change and self.is_geted:
+                elif not self.forbid_change.is_set() and not self.wait_for_get.is_set():
                     self.send_message()
                 return True
         return super().eventFilter(obj, event)
 
     def send_message(self):
-        if self.is_voice_mode or not self.can_change: 
+        if self.is_voice_mode or self.forbid_change.is_set(): 
             return
         content = self.chat_input.toPlainText().strip()
         if content:
             self.text = content
             self.chat_input.clear()
-            self.is_geted = False
+            self.wait_for_get.set()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -709,12 +709,18 @@ class MyWindow(QMainWindow, Ui_MainWindow):
         self.minimizeAppBtn.clicked.connect(self.showMinimized)
 
         self.notify("初始化成功")
-        self.DOING=True
+        self.DOING=asyncio.Event()
+        self.clear_up=asyncio.Event()
+        self.prepare=asyncio.Event()
 
-    def _shutdown(self):
-        self.DOING=False
-        self.shutdown()
+    @asyncSlot()
+    async def _shutdown(self):
+        self.hide()
+        self.DOING.set()
+        await self.clear_up.wait()
         self.close()
+        loop=asyncio.get_event_loop()
+        loop.stop()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -738,11 +744,6 @@ class MyWindow(QMainWindow, Ui_MainWindow):
         icon = QIcon()
         icon.addFile(icon_path, QSize(), QIcon.Mode.Normal, QIcon.State.Off)
         self.maximizeRestoreAppBtn.setIcon(icon)
-    
-    def apply_blue_shimmer(self, button, index):
-        if hasattr(button, 'overlay'):
-            button.overlay.play()
-        self.stackedWidget.setCurrentIndex(index)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -772,8 +773,9 @@ class MyWindow(QMainWindow, Ui_MainWindow):
     async def apply_blue_shimmer(self, button, index):
         if hasattr(button, 'overlay'):
             button.overlay.play()
-        if hasattr(self, 'stackedWidget'):
-            self.stackedWidget.setCurrentIndex(index)
+        if index!=1:self.stackedWidget.setCurrentIndex(index)
+        elif self.prepare: self.stackedWidget.setCurrentIndex(index)
+        else: self.notify("界面加载中...")
 
     def notify(self, message, level="info"):
         """
