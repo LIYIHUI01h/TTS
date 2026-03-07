@@ -6,9 +6,11 @@ import asyncio
 import datetime
 import psutil
 import aiofiles
+import json
+from mika.api import SiliconCloud_model
 from PySide6.QtCore import QEvent, QEasingCurve, QPointF, QTimer, Qt, QPropertyAnimation, QPoint, QRect, QSize, QVariantAnimation
-from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QTextCursor
-from PySide6.QtWidgets import QApplication, QComboBox, QMainWindow, QProgressBar, QSizeGrip, QPushButton, QSlider, QSplitter, QStackedLayout, QTextEdit, QWidget
+from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QShowEvent, QTextCursor
+from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QSizeGrip, QPushButton, QSlider, QSplitter, QStackedLayout, QTextEdit, QWidget
 from qasync import QEventLoop, asyncSlot
 from UI.main_ui import QFrame, QHBoxLayout, QLabel, QVBoxLayout, Ui_MainWindow 
 
@@ -627,7 +629,242 @@ class MonitorPage(BasePage):
 
 class SettingPage(BasePage):
     def __init__(self):
-        super().__init__("SETTINGS", "系统参数与个性化配置")
+        super().__init__("SETTINGS", "系统参数配置")
+        
+        self.config_path = "config.json"
+        
+        self.SiliconCloud_model = SiliconCloud_model
+
+        self.config = {
+            "api_key": "",
+            "model_name": "DeepSeek-V3",
+            "silence_threshold": 1.0,
+            "volume": 0.8,
+            "asr_mode": "in"
+        }
+        
+        self.load_config_from_file()
+        self.setup_setting_ui()
+        self.apply_config_to_ui()
+
+    def showEvent(self, event: QShowEvent):
+        """每次切回设置页面时，强制从文件同步，丢弃未保存的临时改动"""
+        super().showEvent(event)
+        self.load_config_from_file()
+        self.apply_config_to_ui()
+
+    def setup_setting_ui(self):
+        """构建 UI 布局"""
+        self.container_layout.setSpacing(12)
+        self.container_layout.setContentsMargins(10, 5, 10, 5)
+
+        self.api_input = QLineEdit()
+        self.api_input.setEchoMode(QLineEdit.Password)
+        self.api_input.setObjectName("settingInput")
+        self.api_input.setPlaceholderText("填入 API Key...")
+        self.create_row("API 密钥", "修改密钥后需重启程序以重新初始化服务", self.api_input)
+
+        self.asr_combo = QComboBox()
+        self.asr_combo.addItems(["in", "out"])
+        self.asr_combo.setObjectName("settingCombo")
+        self.create_row("识别模式", "in: 录制系统内部声音 | out: 录制麦克风声音", self.asr_combo)
+
+        self.model_select = QComboBox()
+        self.model_select.addItems(list(self.SiliconCloud_model.keys()))
+        self.model_select.setObjectName("settingCombo")
+        self.create_row("思维核心", "选择当前对话使用的云端大模型", self.model_select)
+
+        self.t_slider = QSlider(Qt.Horizontal)
+        self.t_slider.setRange(5, 30)
+        self.t_label = QLabel("1.0s")
+        self.t_label.setFixedWidth(45)
+        self.t_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        t_layout = QHBoxLayout()
+        t_layout.addWidget(self.t_slider)
+        t_layout.addWidget(self.t_label)
+        self.create_row("听力感度", "检测到停顿多久后开始响应(秒)", t_layout)
+        self.t_slider.valueChanged.connect(lambda v: self.t_label.setText(f"{v/10.0}s"))
+
+        self.v_slider = QSlider(Qt.Horizontal)
+        self.v_slider.setRange(0, 100)
+        self.v_label = QLabel("80%")
+        self.v_label.setFixedWidth(45)
+        self.v_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        v_layout = QHBoxLayout()
+        v_layout.addWidget(self.v_slider)
+        v_layout.addWidget(self.v_label)
+        self.create_row("输出音量", "调整 Lethe 说话的声音大小", v_layout)
+        self.v_slider.valueChanged.connect(lambda v: self.v_label.setText(f"{v}%"))
+
+        self.container_layout.addSpacing(15)
+        btn_container = QHBoxLayout()
+        btn_container.addStretch()
+        
+        self.save_btn = QPushButton("保存设置")
+        self.save_btn.setFixedSize(110, 32)
+        self.save_btn.setObjectName("saveButton")
+        self.save_btn.setCursor(Qt.PointingHandCursor)
+        self.save_btn.clicked.connect(self.do_save_logic)
+        
+        btn_container.addWidget(self.save_btn)
+        self.container_layout.addLayout(btn_container)
+
+        self.container_layout.addStretch()
+
+        self.setStyleSheet("""
+            #settingInput, #settingCombo {
+                background: #1a1d22;
+                color: #e0e0e0;
+                border: 1px solid #3d444d;
+                border-radius: 4px;
+                padding: 4px;
+            }
+            #saveButton {
+                background: transparent;
+                color: #bd93f9;
+                border: 1px solid #bd93f9;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            #saveButton:hover { background: rgba(189, 147, 249, 0.1); }
+            #saveButton:pressed { background: rgba(189, 147, 249, 0.2); }
+            QSlider::groove:horizontal { height: 4px; background: #3d444d; border-radius: 2px; }
+            QSlider::handle:horizontal { background: #bd93f9; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }
+        """)
+
+    def create_row(self, title, desc, content):
+        """每一行设置项的容器封装"""
+        card = QFrame()
+        card.setObjectName("SettingCard")
+        card.setStyleSheet("#SettingCard { background: rgba(30, 34, 39, 200); border: 1px solid #2d323b; border-radius: 10px; }")
+        
+        row_layout = QHBoxLayout(card)
+        row_layout.setContentsMargins(15, 10, 15, 10)
+
+        text_widget = QWidget()
+        text_layout = QVBoxLayout(text_widget)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(2)
+        
+        t_lbl = QLabel(title)
+        t_lbl.setStyleSheet("color: #bd93f9; font-weight: bold; font-size: 14px; background:transparent;")
+        d_lbl = QLabel(desc)
+        d_lbl.setStyleSheet("color: #717e95; font-size: 11px; background:transparent;")
+        
+        text_layout.addWidget(t_lbl)
+        text_layout.addWidget(d_lbl)
+        
+        row_layout.addWidget(text_widget, 4)
+        row_layout.addStretch(1)
+        
+        if isinstance(content, QHBoxLayout):
+            row_layout.addLayout(content, 3)
+        else:
+            content.setFixedWidth(220)
+            row_layout.addWidget(content, 3)
+        
+        self.container_layout.addWidget(card)
+
+    def load_config_from_file(self):
+        if os.path.exists(self.config_path):
+            try:
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    self.config.update(json.load(f))
+            except: pass
+
+    def apply_config_to_ui(self):
+        self.api_input.setText(self.config.get("api_key", ""))
+        self.asr_combo.setCurrentText(self.config.get("asr_mode", "in"))
+        self.model_select.setCurrentText(self.config.get("model_name", "DeepSeek-V3"))
+        self.t_slider.setValue(int(self.config.get("silence_threshold", 1.0) * 10))
+        self.v_slider.setValue(int(self.config.get("volume", 0.8) * 100))
+        self.t_label.setText(f"{self.config.get('silence_threshold', 1.0)}s")
+        self.v_label.setText(f"{int(self.config.get('volume', 0.8)*100)}%")
+
+    def do_save_logic(self):
+        old_api = self.config.get("api_key", "")
+        old_asr = self.config.get("asr_mode", "in")
+
+        new_api = self.api_input.text()
+        new_asr = self.asr_combo.currentText()
+
+        need_restart = (new_api != old_api) or (new_asr != old_asr)
+
+        if need_restart:
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("核心参数变更")
+            msg_box.setText("检测到 API 密钥或识别模式变动，这需要重启核心服务。\n是否应用更改？")
+
+            yes_btn = msg_box.addButton("立即重载", QMessageBox.YesRole)
+            no_btn = msg_box.addButton("取消修改", QMessageBox.NoRole)
+            msg_box.setDefaultButton(yes_btn)
+
+            msg_box.setStyleSheet(f"""
+                QMessageBox {{
+                    background-color: #1d2127;
+                    border: 1px solid #87CEFA;
+                }}
+                QLabel {{
+                    color: #ffffff;
+                    font-family: 'Microsoft YaHei';
+                    padding: 10px;
+                    min-width: 300px;
+                }}
+                QPushButton {{
+                    border: 1px solid #87CEFA;
+                    border-radius: 3px;
+                    padding: 5px 15px;
+                    background: transparent;
+                    color: #87CEFA;
+                    font-family: 'Microsoft YaHei';
+                    min-width: 80px;
+                }}
+                QPushButton:hover {{
+                    background-color: rgba(135, 206, 250, 0.1);
+                }}
+                QPushButton:pressed {{
+                    background-color: rgba(135, 206, 250, 0.2);
+                }}
+            """)
+
+            no_btn.setStyleSheet("color: #888888; border-color: #444444;")
+
+            msg_box.exec()
+
+            if msg_box.clickedButton() == no_btn:
+                self.api_input.setText(old_api)
+                self.asr_combo.setCurrentText(old_asr)
+                self.notify("操作已取消", "warn")
+                return 
+
+        self.config["api_key"] = new_api
+        self.config["asr_mode"] = new_asr
+        self.config["model_name"] = self.model_select.currentText()
+        self.config["silence_threshold"] = self.t_slider.value() / 10.0
+        self.config["volume"] = self.v_slider.value() / 100.0
+
+        try:
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=4, ensure_ascii=False)
+
+            main_win = self.window()
+            if hasattr(main_win, 'flags'):
+                main_win.flags.update(self.config)
+
+            self.notify("设置保存成功", "info")
+        except Exception as e:
+            self.notify(f"保存异常: {str(e)}", "error")
+
+    def notify(self, message, level="info"):
+        """
+        level: info (蓝色), warn (橙色), error (红色)
+        """
+        colors = {
+            "info": "#87CEFA",
+            "warn": "#ffb86c",
+            "error": "#ff5555"
+        }
+        ToastNotification(self, message, colors.get(level, "#87CEFA"))
 
 class ShimmerOverlay(QWidget):
     def __init__(self, parent):
@@ -773,9 +1010,11 @@ class MyWindow(QMainWindow, Ui_MainWindow):
     async def apply_blue_shimmer(self, button, index):
         if hasattr(button, 'overlay'):
             button.overlay.play()
-        if index!=1:self.stackedWidget.setCurrentIndex(index)
-        elif self.prepare: self.stackedWidget.setCurrentIndex(index)
-        else: self.notify("界面加载中...")
+        if index!=1 and index!=2:self.stackedWidget.setCurrentIndex(index)
+        elif index==2 and self.prepare.is_set():self.stackedWidget.setCurrentIndex(index)
+        elif index==1 and self.prepare.is_set() and self.page_setting.config["api_key"]: self.stackedWidget.setCurrentIndex(index)
+        elif not self.prepare.is_set(): self.notify("界面加载中...")
+        else: self.notify("未设置api_key")
 
     def notify(self, message, level="info"):
         """

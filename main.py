@@ -2,13 +2,14 @@ import os
 import asyncio
 import psutil
 import torch, gc
+import json
 from UI.UI import MyWindow
 from time import sleep
 from queue import Queue
 from time import time
 from PySide6.QtWidgets import QApplication
 from mika.tool import getLogger,kill
-from mika.api import async_LLM_api
+from mika.api import async_LLM_api,SiliconCloud_model
 from mika import async_speech
 from qasync import QEventLoop, asyncSlot
 from threading import Thread
@@ -48,28 +49,16 @@ api_que=Queue()
 future_que=Queue()
 tts_executor=ThreadPoolExecutor(max_workers=5)
 
-async def async_speech_part(window,api_key,asr_mode="out",silence_threshold=1.0):
+async def async_speech_part(window):
     os.makedirs("log",exist_ok=True)
     logger=getLogger(log_name="main",log_path="log/speech.log")
     optimization_logger=getLogger(log_name="async_speech_part",log_path="log/optimization.log")
+    api_key=window.page_setting.config["api_key"]
+
     asr=async_speech.SenseVoiceController(log_name="asr",log_path="log/speech.log")
     api=async_LLM_api(api_key=api_key,log_name="api",log_path="log/speech.log")
     tts=async_speech.GPT_SoVITSController(r"models\v2pp\mmk\tmp.json",log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
     ap=async_speech.AudioPlayer(log_name="audioplayer",log_path="log/speech.log")
-
-    try:
-        await tts.start_service(window.DOING)
-        await asr.load_models(window.DOING)
-        await api.warmup(window.DOING)
-    except Exception as e:
-        logger.error( f"❌ 初始化失败:{e}")
-        text_que.put_nowait(SHUTDOWN)
-        tts_executor.shutdown(wait=False)
-        kill()
-        window.clear_up.set()
-        return
-    
-    window.prepare.set()
 
     flags={
         "audioplayer_count":0,
@@ -79,6 +68,20 @@ async def async_speech_part(window,api_key,asr_mode="out",silence_threshold=1.0)
         "api_task":None,
         "last_audio_done":time()
     }
+    for key,value in window.page_setting.config.items():flags[key]=value
+
+    try:
+        await tts.start_service(window.DOING)
+        await asr.load_models(window.DOING)
+    except Exception as e:
+        logger.error( f"❌ 初始化失败:{e}")
+        tts_executor.shutdown(wait=False)
+        window.clear_up.set()
+        return
+    
+    try: await api.warmup(window.DOING)
+    finally:pass
+    window.prepare.set()
 
     def do_interpt():
         flags["session_id"]+=1
@@ -109,6 +112,7 @@ async def async_speech_part(window,api_key,asr_mode="out",silence_threshold=1.0)
                 if pii==SHUTDOWN:
                     api_que.put_nowait(SHUTDOWN)
                     break
+                if pii==None: break
                 session_id,content=pii
                 if session_id!=flags["session_id"]:continue
 
@@ -116,6 +120,7 @@ async def async_speech_part(window,api_key,asr_mode="out",silence_threshold=1.0)
                 flags["api_task"]=api.start(
                     content=content,
                     system_prompt=SYSTEM_PROMPT,
+                    model=SiliconCloud_model[flags["model_name"]]
                 )
 
                 try:
@@ -185,6 +190,7 @@ async def async_speech_part(window,api_key,asr_mode="out",silence_threshold=1.0)
 
                 flags["audioplayer_count"]+=1
                 optimization_logger.info(f"{flags['audioplayer_count']}次音频播放间隔{time()-last:.2f}")
+                ap.set_volume(flags["volume"])
                 await ap.play(stream)
                 last=time()
         
@@ -202,18 +208,31 @@ async def async_speech_part(window,api_key,asr_mode="out",silence_threshold=1.0)
         interpts=[]
 
         while not window.DOING.is_set():
+            for key,value in window.page_setting.config.items():
+                if key=="api_key" and flags["api_key"]!=value:
+                    logger.info("api_key改变")
+                    window.hide()
+                    text_que.put_nowait(None)
+                    api_thread.join()
+                    api=async_LLM_api(api_key=value,log_name="api",log_path="log/speech.log")
+                    await api.warmup(window.DOING)
+                    api_thread=Thread(target=_api_thread,daemon=False)
+                    api_thread.start()
+                    window.show()
+                flags[key]=value
+
             if window.stackedWidget.currentIndex()==1:
                 if window.page_chat.is_voice_mode:
                     window.page_chat.forbid_change.set()
-                    asr_task=await asr.start(mode=asr_mode,window=window)
+                    asr_task=await asr.start(mode=flags["asr_mode"],window=window)
                     async for text in asr_task:
                         if asr_last:
                             optimization_logger.info(f"asr首次响应耗时{time()-asr_last:.2f}")
-                            asr_last=None       
+                            asr_last=None
                         if not flags["audioplay_done"]:print("当前对话还未结束，无法处理当前语音") 
 
                         if flags["audioplay_done"]:
-                            if time()-flags["last_audio_done"] < silence_threshold: continue
+                            if time()-flags["last_audio_done"] < flags["silence_threshold"]: continue
                             else: 
                                 logger.info(text)
                                 window.page_chat.chat_input.setPlainText(f"语音识别模式: {text}")
@@ -271,7 +290,7 @@ if __name__ == "__main__":
     window = MyWindow()
     window.show()
 
-    loop.create_task(async_speech_part(window,"sk-fuseptosqlwqzoboogwfemkzfcnzgnlhkixvurvrqupnkyrx","in"))
+    loop.create_task(async_speech_part(window))
     try:
         with loop:loop.run_forever()
     finally:
