@@ -3,13 +3,14 @@ import asyncio
 import psutil
 import torch, gc
 import json
+from dotenv import load_dotenv,set_key
 from UI.UI import MyWindow
 from time import sleep
 from queue import Queue
 from time import time
 from PySide6.QtWidgets import QApplication
 from mika.tool import getLogger,kill
-from mika.api import async_LLM_api,SiliconCloud_model
+from mika.api import async_LLM_api,async_embedding_api,SiliconCloud_model
 from mika import async_speech
 from qasync import QEventLoop, asyncSlot
 from threading import Thread
@@ -53,10 +54,12 @@ async def async_speech_part(window):
     os.makedirs("log",exist_ok=True)
     logger=getLogger(log_name="main",log_path="log/speech.log")
     optimization_logger=getLogger(log_name="async_speech_part",log_path="log/optimization.log")
-    api_key=window.page_setting.config["api_key"]
+
+    load_dotenv("config/config.env")
+    api_key = os.getenv("API_KEY")
 
     asr=async_speech.SenseVoiceController(log_name="asr",log_path="log/speech.log")
-    api=async_LLM_api(api_key=api_key,log_name="api",log_path="log/speech.log")
+    llm_api=async_LLM_api(api_key=api_key,log_name="api",log_path="log/speech.log")
     tts=async_speech.GPT_SoVITSController(r"models\v2pp\mmk\tmp.json",log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
     ap=async_speech.AudioPlayer(log_name="audioplayer",log_path="log/speech.log")
 
@@ -68,7 +71,10 @@ async def async_speech_part(window):
         "api_task":None,
         "last_audio_done":time()
     }
+
     for key,value in window.page_setting.config.items():flags[key]=value
+    flags["api_key"]=api_key
+    window.page_setting.config["api_key"]=api_key
 
     try:
         await tts.start_service(window.DOING)
@@ -79,7 +85,7 @@ async def async_speech_part(window):
         window.clear_up.set()
         return
     
-    try: await api.warmup(window.DOING)
+    try: await llm_api.warmup(window.DOING)
     finally:pass
     window.prepare.set()
 
@@ -117,7 +123,7 @@ async def async_speech_part(window):
                 if session_id!=flags["session_id"]:continue
 
                 api_last=time()
-                flags["api_task"]=api.start(
+                flags["api_task"]=llm_api.start(
                     content=content,
                     system_prompt=SYSTEM_PROMPT,
                     model=SiliconCloud_model[flags["model_name"]]
@@ -214,8 +220,9 @@ async def async_speech_part(window):
                     window.hide()
                     text_que.put_nowait(None)
                     api_thread.join()
-                    api=async_LLM_api(api_key=value,log_name="api",log_path="log/speech.log")
-                    await api.warmup(window.DOING)
+                    api_key=value
+                    llm_api=async_LLM_api(api_key=api_key,log_name="api",log_path="log/speech.log")
+                    await llm_api.warmup(window.DOING)
                     api_thread=Thread(target=_api_thread,daemon=False)
                     api_thread.start()
                     window.show()
@@ -280,6 +287,7 @@ async def async_speech_part(window):
         text_que.put_nowait(SHUTDOWN)
         tts_executor.shutdown(wait=False)
         kill()
+        set_key("config/config.env", "API_KEY", api_key)
         window.clear_up.set()
 
 if __name__ == "__main__":

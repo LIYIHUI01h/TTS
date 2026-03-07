@@ -1,3 +1,6 @@
+# 忽略api_key环境文件
+config/config.env
+
 # 忽略整个 GPT-SoVITS 文件夹
 GPT-SoVITS/
 

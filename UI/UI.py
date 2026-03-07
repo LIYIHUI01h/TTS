@@ -4,6 +4,7 @@ import sys
 import pynvml
 import asyncio
 import datetime
+import copy
 import psutil
 import aiofiles
 import json
@@ -631,7 +632,7 @@ class SettingPage(BasePage):
     def __init__(self):
         super().__init__("SETTINGS", "系统参数配置")
         
-        self.config_path = "config.json"
+        self.config_path = "config/config.json"
         
         self.SiliconCloud_model = SiliconCloud_model
 
@@ -843,9 +844,11 @@ class SettingPage(BasePage):
         self.config["silence_threshold"] = self.t_slider.value() / 10.0
         self.config["volume"] = self.v_slider.value() / 100.0
 
+        clean_config = copy.deepcopy(self.config)
+
         try:
             with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(self.config, f, indent=4, ensure_ascii=False)
+                json.dump(clean_config, f, indent=4, ensure_ascii=False)
 
             main_win = self.window()
             if hasattr(main_win, 'flags'):
