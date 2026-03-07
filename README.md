@@ -1,7 +1,5 @@
 # 🛠️ Lethe 项目开发者手记 (Internal Dev Log)
 
-> **“记录是为了不忘记，毕竟我名为忘川。”**
-
 ## 🎨 UI 界面设计 (Interface Design)
 待实现
 
