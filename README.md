@@ -50,6 +50,11 @@
 * **软着陆 (Soft Shutdown)**：向各级队列投放 `SHUTDOWN` 令牌，引导线程优雅退出。
 * **硬清理 (Hard Kill)**：在 `finally` 块中强制调用 `kill()` 物理清除所有残留的 Python 子进程，确保 GPU 资源彻底回笼。
 
+### 3. 记忆管理：大脑 (RAG)
+
+基于llamaindex+adrant
+
+query+short_memory ->llm时间、动作、心情等过滤器的提取->RAG进行向量检举->返回llm进行文本对话
 
 ## 📝 待开发模块蓝图 (Future Roadmap)
 待实现功能：

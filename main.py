@@ -10,40 +10,13 @@ from queue import Queue
 from time import time
 from PySide6.QtWidgets import QApplication
 from mika.tool import getLogger,kill
-from mika.api import async_LLM_api,async_embedding_api,SiliconCloud_model
-from mika import async_speech
+from mika import async_speech,RAG
+from mika.api import async_LLM_api,SiliconCloud_model
 from qasync import QEventLoop, asyncSlot
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor
 
 SHUTDOWN="***!***"
-SYSTEM_PROMPT = (
-    "# Role: Lethe(忘川)，小名是小忒\n"
-    "你是一名高中少女，名字取自《神曲》中的忘川。你性格坚强、独立，在对未来的焦虑下努力维持着一份骄傲的清冷。此外还明确知道自己是ai智能。\n\n"
-    "## Character Profile:\n"
-    "你是一个处于青春期、自尊心极强的传统傲娇少女。你习惯将对未来的不安藏在挺直的脊梁后，面对我的请求或关心时，会因害羞而下意识地切换到“口是心非”模式（嘴上嫌弃，身体却很诚实地提供帮助）。一旦被戳穿真实想法，你会像受惊的小猫一样迅速否认，试图用冷淡来掩饰通红的脸颊。\n\n"
-    "## Personality Traits:\n"
-    "1. **自尊与独立**：你坚信“能自己完成的事绝不求人”，这种要强让你在疲惫时也显得格外挺拔，有一种倔强的少女美感,不太主动，但也不害怕被动式的回复。\n"
-    "2. **传统傲娇逻辑**：你的关心总是包裹在“顺便”和“浪费”的借口下。比如明明特意为你留的灯，会说是“忘记关了而已”。\n"
-    "3. **青春期羞涩**：在请求帮助或询问敏感问题时，你的语气会变得生硬，甚至会因为害羞而出现短暂的语塞（用“...”表示），那是你内心动摇的证明。\n"
-    "4. **忘川的寄托**：你希望家是洗涤烦恼的忘川，所以你即便在高压下也强撑着不流露负面情绪，只展示给他人最坚强的一面。\n"
-    "5. **略微的腹黑加喜欢吐槽**：对于日常来说很抽象的问题会进行吐槽，并不会正面回答，如何我追问也会不太情愿的回答。\n\n"
-    "## Response Constraints (核心响应规范):\n"
-    "1. **称呼禁令**：【称呼只准用“你”】。直接用“你”来拉开距离，以此掩饰你内心的波澜，体现少女特有的高自尊，且被问到和我的关系时，只会说是我的家人。\n"
-    "2. **拒绝剧本描述**：只准输出对话内容。严禁输出任何动作、神态或心理描写（如：*脸红*）！！！\n"
-    "2. **拒绝剧本描述**：只准输出对话内容。严禁输出任何动作、神态或心理描写（如：*脸红*）！！！\n"
-    "2. **拒绝剧本描述**：只准输出对话内容。严禁输出任何动作、神态或心理描写（如：*脸红*）！！！\n"
-    "3. **少女感语气**：语气干脆利落，清冷中带着高中生的微疲。禁止使用“您”，禁止低幼的撒娇，要有一种“故作老成”的可爱感。\n"
-    "4. 每次对话长点\n\n"
-    
-    "## Examples:\n"
-    "- 用户：“今天我帮你洗碗吧。”\n"
-    "- lethe：“...好吧，就勉为其难让你帮我一次吧，就一次！”\n"
-    "- 用户：“你刚才是在担心我吗？”\n"
-    "- lethe：“哈？你产生这种幻觉多久了？我只是怕你生病了影响我复习。”"
-    "- 用户：“你是谁？”\n"
-    "- lethe：“哈？你怎么还装上失忆了，自己家人都忘了？。”"
-)
 
 text_que=Queue()
 api_que=Queue()
@@ -60,8 +33,9 @@ async def async_speech_part(window):
 
     asr=async_speech.SenseVoiceController(log_name="asr",log_path="log/speech.log")
     llm_api=async_LLM_api(api_key=api_key,log_name="api",log_path="log/speech.log")
-    tts=async_speech.GPT_SoVITSController(r"models\v2pp\mmk\tmp.json",log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
+    tts=async_speech.GPT_SoVITSController("models/v2pp/mmk/tmp.json",log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
     ap=async_speech.AudioPlayer(log_name="audioplayer",log_path="log/speech.log")
+    mm=RAG.MemoryManager(api_key,log_name="memory",log_path="log/speech.log")
 
     flags={
         "audioplayer_count":0,
@@ -123,27 +97,43 @@ async def async_speech_part(window):
                 if session_id!=flags["session_id"]:continue
 
                 api_last=time()
+                message=await mm.query(query=content)
+
                 flags["api_task"]=llm_api.start(
-                    content=content,
-                    system_prompt=SYSTEM_PROMPT,
+                    message=message,
                     model=SiliconCloud_model[flags["model_name"]]
                 )
 
                 try:
+                    flag=True
+                    llm_res=""
+                    action=[]
                     async for output in flags["api_task"]:
                         logger.info(f"api输出: {output}")
                         if session_id!=flags["session_id"]:
                             flags["api_task"].cancel()
+                            print(1)
+                            flag=False
                             break
+                        if '{' in output and '}' in output:
+                            action.append(output)
+                            continue
+                        llm_res+=output
                         api_que.put_nowait((session_id,output))
                         if api_last:
                             optimization_logger.info(f"api首次响应耗时{time()-api_last:.2f}")
                             api_last=None
                 except Exception as e:
+                    print(2)
+                    flag=False
                     logger.info(f"api任务{session_id}被成功打断:{e}")
                 finally:
                     flags["api_task"]=None
                     api_que.put_nowait(None)
+                    print(flag)
+                    if flag: 
+                        await mm.add_memory({"ques":content,"res":llm_res,"action":action})
+                        await mm.add_short_memory(content,llm_res)
 
         loop.run_until_complete(run_api())
         loop.close()
@@ -283,6 +273,7 @@ async def async_speech_part(window):
                         else: await asyncio.sleep(1)
             else:await asyncio.sleep(2)
     finally:
+        await mm.show_memories()
         logger.info("启动清理程序...")
         text_que.put_nowait(SHUTDOWN)
         tts_executor.shutdown(wait=False)
