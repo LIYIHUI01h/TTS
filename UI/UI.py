@@ -769,8 +769,10 @@ class SettingPage(BasePage):
     def load_config_from_file(self):
         if os.path.exists(self.config_path):
             try:
+                key=self.config["api_key"]
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     self.config.update(json.load(f))
+                if key:self.config["api_key"]=key
             except: pass
 
     def apply_config_to_ui(self):
