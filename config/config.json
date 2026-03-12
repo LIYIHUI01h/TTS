@@ -1,6 +1,6 @@
 {
     "api_key": "sk-fuseptosqlwqzoboogwfemkzfcnzgnlhkixvurvrqupnkyrx",
-    "model_name": "DeepSeek-V3",
+    "model_name": "Qwen2.5-72B",
     "silence_threshold": 1.0,
     "volume": 0.9,
     "asr_mode": "in"

@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 import asyncio
 from dotenv import load_dotenv,set_key
 from UI.UI import MyWindow
@@ -27,12 +28,6 @@ async def async_speech_part(window):
     load_dotenv("config/config.env")
     api_key = os.getenv("API_KEY")
 
-    asr=async_speech.SenseVoiceController(log_name="asr",log_path="log/speech.log")
-    llm_api=async_LLM_api(api_key=api_key,log_name="api",log_path="log/speech.log")
-    tts=async_speech.GPT_SoVITSController("models/v2pp/mmk/tmp.json",log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
-    ap=async_speech.AudioPlayer(log_name="audioplayer",log_path="log/speech.log")
-    mm=RAG.MemoryManager(api_key,log_name="memory",log_path="log/memory.log")
-
     flags={
         "audioplayer_count":0,
         "audioplay_done":True,
@@ -44,18 +39,28 @@ async def async_speech_part(window):
 
     for key,value in window.page_setting.config.items():flags[key]=value
     flags["api_key"]=api_key
+    flags["model_name"]=SiliconCloud_model[flags["model_name"]]
     window.page_setting.config["api_key"]=api_key
+
+    asr=async_speech.SenseVoiceController(log_name="asr",log_path="log/speech.log")
+    llm_api=async_LLM_api(api_key=api_key,log_name="api",log_path="log/speech.log")
+    tts=async_speech.GPT_SoVITSController("models/v2pp/mmk/tmp.json",log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
+    ap=async_speech.AudioPlayer(log_name="audioplayer",log_path="log/speech.log")
+    mm=RAG.MemoryManager(api_key,log_name="memory",log_path="log/memory.log",model=flags["model_name"])
+
 
     try:
         tasks = [
             llm_api.warmup(window.DOING),
+            mm.api_llm.warmup(window.DOING),
             tts.start_service(window.DOING),
             asr.load_models(window.DOING),
-            mm.load_prompt("SYSTEM_PROMPT.md")
+            mm.load_prompt("SYSTEM_PROMPT.md",include_core_memory=False)
         ]
 
         await asyncio.gather(*tasks)
         logger.info("✅ chat界面加载成功")
+        window.notify("chat界面加载成功")
     except Exception as e:
         logger.error( f"❌ 初始化失败:{e}")
         tts_executor.shutdown(wait=False)
@@ -136,8 +141,9 @@ async def async_speech_part(window):
                     flags["api_task"]=None
                     llm_que.put_nowait(None)
                     if flag: 
-                        add_success=await mm.add_memory(content,llm_json)
-                        if add_success:await mm.add_short_memory(content,llm_res)
+                        date=datetime.now()
+                        await mm.add_memory(content,llm_json,date)
+                        await mm.add_short_memory(content,llm_res,date)
             logger.info("llm线程结束")
 
         loop.run_until_complete(run_api())
@@ -195,6 +201,7 @@ async def async_speech_part(window):
                 ap.set_volume(flags["volume"])
                 await ap.play(stream)
                 last=time()
+            logger.info("audio_player线程结束")
         
         loop.run_until_complete(run_ap())
         loop.close()
@@ -206,21 +213,25 @@ async def async_speech_part(window):
         api_thread.start()
         stream_thread.start()
         ap_thread.start()
+        mm.start_add_memory_thread()
         asr_last=time()
         interpts=[]
 
         while not window.DOING.is_set():
             for key,value in window.page_setting.config.items():
                 if key=="api_key" and flags["api_key"]!=value:
-                    logger.info("api_key改变")
                     window.hide()
+                    logger.info("api_key改变")
                     text_que.put_nowait(None)
                     api_thread.join()
                     api_key=value
                     llm_api=async_LLM_api(api_key=api_key,log_name="api",log_path="log/speech.log")
+                    mm=RAG.MemoryManager(api_key,log_name="memory",log_path="log/memory.log",model=flags["model_name"])
                     await llm_api.warmup(window.DOING)
+                    await mm.api_llm.warmup(window.DOING)
                     api_thread=Thread(target=_api_thread,daemon=False)
                     api_thread.start()
+                    mm.start_add_memory_thread()
                     window.show()
                 flags[key]=value
 
@@ -232,7 +243,7 @@ async def async_speech_part(window):
                         if asr_last:
                             optimization_logger.info(f"asr首次响应耗时{time()-asr_last:.2f}")
                             asr_last=None
-                        if not flags["audioplay_done"]:print("当前对话还未结束，无法处理当前语音") 
+                        if not flags["audioplay_done"]:print("当前对话还未结束，无法处理当前语音")
 
                         if flags["audioplay_done"]:
                             if time()-flags["last_audio_done"] < flags["silence_threshold"]: continue
@@ -279,6 +290,10 @@ async def async_speech_part(window):
                         else: await asyncio.sleep(1)
             else:await asyncio.sleep(2)
     finally:
+        loop=asyncio.get_event_loop()
+        asyncio.set_event_loop(loop)
+        mm.new_memory_que.put_nowait(None)
+        await loop.run_in_executor(None,mm.add_memory_done.wait)
         await mm.show_memories()
         logger.info("启动清理程序...")
         text_que.put_nowait(SHUTDOWN)
@@ -287,6 +302,7 @@ async def async_speech_part(window):
         set_key("config/config.env", "API_KEY", api_key)
         logger.info("✅ 资源释放完成")
         window.clear_up.set()
+        logger.info("开始释放UI资源...")
 
 if __name__ == "__main__":
     app = QApplication([])
