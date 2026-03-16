@@ -18,7 +18,7 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
     QMainWindow, QPushButton, QSizePolicy, QStackedWidget,
     QVBoxLayout, QWidget)
-import UI.resources_rc
+from UI import resources_rc
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
@@ -154,6 +154,7 @@ class Ui_MainWindow(object):
         self.verticalMenuLayout.setContentsMargins(0, 0, 0, 0)
         self.topMenu = QFrame(self.leftMenuFrame)
         self.topMenu.setObjectName(u"topMenu")
+        self.topMenu.setMinimumSize(QSize(0, 300))
         self.topMenu.setStyleSheet(u"QPushButton:hover {\n"
 "    background-color: #343b48;\n"
 "}\n"
@@ -237,9 +238,21 @@ class Ui_MainWindow(object):
         self.btn_log.setFont(font)
         self.btn_log.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_log.setLayoutDirection(Qt.LeftToRight)
-        self.btn_log.setStyleSheet(u"background-image: url(:/icons/images/icons/cil-clock.png)")
+        self.btn_log.setStyleSheet(u"background-image: url(:/icons/images/icons/cil-clock.png)\n"
+"\n"
+"")
 
         self.verticalLayout_8.addWidget(self.btn_log)
+
+        self.btn_memory = QPushButton(self.topMenu)
+        self.btn_memory.setObjectName(u"btn_memory")
+        sizePolicy.setHeightForWidth(self.btn_memory.sizePolicy().hasHeightForWidth())
+        self.btn_memory.setSizePolicy(sizePolicy)
+        self.btn_memory.setMinimumSize(QSize(0, 45))
+        self.btn_memory.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_memory.setStyleSheet(u"background-image: url(:/icons/images/icons/cil-mood-very-good.png)")
+
+        self.verticalLayout_8.addWidget(self.btn_memory)
 
 
         self.verticalMenuLayout.addWidget(self.topMenu, 0, Qt.AlignTop)
@@ -451,8 +464,6 @@ class Ui_MainWindow(object):
         self.stackedWidget.addWidget(self.chat)
         self.setting = QWidget()
         self.setting.setObjectName(u"setting")
-        self.verticalLayout_20 = QVBoxLayout(self.setting)
-        self.verticalLayout_20.setObjectName(u"verticalLayout_20")
         self.stackedWidget.addWidget(self.setting)
         self.monitor = QWidget()
         self.monitor.setObjectName(u"monitor")
@@ -460,6 +471,10 @@ class Ui_MainWindow(object):
         self.log = QWidget()
         self.log.setObjectName(u"log")
         self.stackedWidget.addWidget(self.log)
+        self.memory = QWidget()
+        self.memory.setObjectName(u"memory")
+        self.memory.setTabletTracking(False)
+        self.stackedWidget.addWidget(self.memory)
 
         self.verticalLayout_15.addWidget(self.stackedWidget)
 
@@ -619,6 +634,7 @@ class Ui_MainWindow(object):
         self.btn_setting.setText(QCoreApplication.translate("MainWindow", u"Exit", None))
         self.btn_monitor.setText(QCoreApplication.translate("MainWindow", u"New", None))
         self.btn_log.setText(QCoreApplication.translate("MainWindow", u"Save", None))
+        self.btn_memory.setText(QCoreApplication.translate("MainWindow", u"PushButton", None))
         self.toggleLeftBox.setText(QCoreApplication.translate("MainWindow", u"Left Box", None))
         self.titleRightInfo.setText("")
 #if QT_CONFIG(tooltip)

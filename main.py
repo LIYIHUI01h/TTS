@@ -13,6 +13,8 @@ from qasync import QEventLoop
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor
 
+os.environ["NO_PROXY"] = "localhost,127.0.0.1"
+
 SHUTDOWN="***!***"
 
 text_que=Queue()
@@ -48,13 +50,11 @@ async def async_speech_part(window):
     ap=async_speech.AudioPlayer(log_name="audioplayer",log_path="log/speech.log")
     mm=RAG.MemoryManager(api_key,log_name="memory",log_path="log/memory.log",model=flags["model_name"])
 
-
     try:
         tasks = [
             llm_api.warmup(window.DOING),
             mm.api_llm.warmup(window.DOING),
             tts.start_service(window.DOING),
-            asr.load_models(window.DOING),
             mm.load_prompt("SYSTEM_PROMPT.md",include_core_memory=False)
         ]
 
@@ -64,6 +64,7 @@ async def async_speech_part(window):
     except Exception as e:
         logger.error( f"❌ 初始化失败:{e}")
         tts_executor.shutdown(wait=False)
+        kill()
         window.clear_up.set()
         return
     
@@ -237,6 +238,11 @@ async def async_speech_part(window):
 
             if window.stackedWidget.currentIndex()==1:
                 if window.page_chat.is_voice_mode:
+                    if not window.page_chat.asr_prepare.is_set(): 
+                        window.notify("语音识别模型加载中请稍等...")
+                        await asr.load_models(window.DOING),
+                        window.notify("语音识别模型加载完成")
+                        window.page_chat.asr_prepare.set()
                     window.page_chat.forbid_change.set()
                     asr_task=await asr.start(mode=flags["asr_mode"],window=window)
                     async for text in asr_task:
@@ -265,7 +271,7 @@ async def async_speech_part(window):
 
                     while True:
                         if flags["audioplay_done"]  or window.page_chat.interpt.is_set():
-                            window.page_chat.forbid_cahnge.clear()
+                            window.page_chat.forbid_change.clear()
                             break
                         else: await asyncio.sleep(1)
                 else:

@@ -274,6 +274,12 @@ QToolTip { color: #ffffff; background-color: rgba(33, 37, 43, 180); border-left:
              </property>
              <item alignment="Qt::AlignTop">
               <widget class="QFrame" name="topMenu">
+               <property name="minimumSize">
+                <size>
+                 <width>0</width>
+                 <height>300</height>
+                </size>
+               </property>
                <property name="styleSheet">
                 <string notr="true">QPushButton:hover {
     background-color: #343b48;
@@ -519,10 +525,37 @@ QToolTip { color: #ffffff; background-color: rgba(33, 37, 43, 180); border-left:
                    <enum>Qt::LeftToRight</enum>
                   </property>
                   <property name="styleSheet">
-                   <string notr="true">background-image: url(:/icons/images/icons/cil-clock.png)</string>
+                   <string notr="true">background-image: url(:/icons/images/icons/cil-clock.png)
+
+</string>
                   </property>
                   <property name="text">
                    <string>Save</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="btn_memory">
+                  <property name="sizePolicy">
+                   <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                    <horstretch>0</horstretch>
+                    <verstretch>0</verstretch>
+                   </sizepolicy>
+                  </property>
+                  <property name="minimumSize">
+                   <size>
+                    <width>0</width>
+                    <height>45</height>
+                   </size>
+                  </property>
+                  <property name="cursor">
+                   <cursorShape>PointingHandCursor</cursorShape>
+                  </property>
+                  <property name="styleSheet">
+                   <string notr="true">background-image: url(:/icons/images/icons/cil-mood-very-good.png)</string>
+                  </property>
+                  <property name="text">
+                   <string>PushButton</string>
                   </property>
                  </widget>
                 </item>
@@ -1064,11 +1097,14 @@ border: 1px solid rgb(44, 49, 58);</string>
                        <string notr="true"/>
                       </property>
                      </widget>
-                     <widget class="QWidget" name="setting">
-                      <layout class="QVBoxLayout" name="verticalLayout_20"/>
-                     </widget>
+                     <widget class="QWidget" name="setting"/>
                      <widget class="QWidget" name="monitor"/>
                      <widget class="QWidget" name="log"/>
+                     <widget class="QWidget" name="memory">
+                      <property name="tabletTracking">
+                       <bool>false</bool>
+                      </property>
+                     </widget>
                     </widget>
                    </item>
                   </layout>
