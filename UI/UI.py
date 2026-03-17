@@ -1,6 +1,5 @@
 import math
 import os
-import random
 import sys
 import pynvml
 import asyncio
@@ -13,7 +12,7 @@ from mika.api import SiliconCloud_model
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtCore import QEvent, QEasingCurve, QPointF, QTimer, Qt, QPropertyAnimation, QPoint, QRect, QSize, QVariantAnimation
 from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShowEvent, QTextCursor,QPixmap
-from PySide6.QtWidgets import QApplication, QComboBox, QGraphicsDropShadowEffect, QInputDialog, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QSizeGrip, QPushButton, QSlider, QSplitter, QStackedLayout, QTextEdit, QTreeWidget, QTreeWidgetItem, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QGraphicsDropShadowEffect, QInputDialog, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QSizeGrip, QPushButton, QSlider, QSplitter, QStackedLayout, QTextEdit, QTreeWidget, QTreeWidgetItem, QWidget
 from qasync import QEventLoop, asyncSlot
 from UI.main_ui import QFrame, QHBoxLayout, QLabel, QVBoxLayout, Ui_MainWindow 
 
@@ -1043,10 +1042,10 @@ class FloatingLogMonitor(QWidget):
             except: pass
 
 class MemoryPage(BasePage):
-    def __init__(self, memory_manager=None):
+    def __init__(self):
         super().__init__("MEMORY CORE", "系统长期记忆图谱 - 仅限浏览模式")
         self.layout.setContentsMargins(25, 20, 25, 15)
-        self.memory_manager = memory_manager
+        self.memory_manager = None
         
         # 1. 顶部操作栏
         sub_title_label = self.layout.itemAt(1).widget()
@@ -1124,30 +1123,255 @@ class MemoryPage(BasePage):
         self.edit_mode_btn.clicked.connect(self.verify_and_open_editor)
         self.editor_window = None
 
+    def load_graph(self):
+        """加载优化后的 3D 悬浮感记忆星图"""
+        # 配置信息
+        config = {
+            "serverUrl": "bolt://localhost:7687",
+            "user": "neo4j",
+            "pass": "12345678" 
+        }
+
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script src="https://unpkg.com/neovis.js@2.1.0/dist/neovis.js"></script>
+            <style>
+                /* 全局样式：对齐主 UI 科技感 */
+                body {{ 
+                    background-color: #16191d; 
+                    margin: 0; 
+                    overflow: hidden; 
+                    font-family: 'Segoe UI', 'PingFang SC', sans-serif; 
+                }}
+                
+                #viz {{ 
+                    width: 100vw; 
+                    height: 100vh; 
+                    position: absolute; 
+                }}
+
+                /* 右侧悬浮面板：更轻量、半透明 */
+                #info-panel {{
+                    position: absolute;
+                    right: -320px; 
+                    top: 15px;
+                    width: 280px;
+                    height: calc(100% - 30px);
+                    background: rgba(22, 25, 29, 0.85);
+                    backdrop-filter: blur(10px); /* 磨砂玻璃 */
+                    border: 1px solid rgba(135, 206, 250, 0.2);
+                    border-radius: 15px;
+                    color: #abb2bf;
+                    padding: 18px;
+                    transition: all 0.5s cubic-bezier(0.19, 1, 0.22, 1);
+                    z-index: 1000;
+                    overflow-y: auto;
+                    box-shadow: -10px 0 30px rgba(0,0,0,0.3);
+                }}
+                #info-panel.active {{ right: 15px; }}
+
+                .close-btn {{ 
+                    float: right; cursor: pointer; color: #87CEFA; font-size: 18px; 
+                }}
+                .title {{ 
+                    color: #87CEFA; font-size: 14px; font-weight: bold; 
+                    letter-spacing: 1px; margin-bottom: 15px; 
+                }}
+                .summary-box {{ 
+                    background: rgba(255, 255, 255, 0.05); 
+                    padding: 12px; border-radius: 8px; 
+                    font-size: 13px; line-height: 1.5; color: #dcdcdc;
+                    margin-bottom: 15px; border-left: 3px solid #87CEFA;
+                }}
+                .qa-card {{ 
+                    background: rgba(135, 206, 250, 0.03);
+                    border-radius: 6px; padding: 10px; margin-bottom: 10px;
+                }}
+                .qa-q {{ color: #87CEFA; font-size: 12px; font-weight: bold; }}
+                .qa-a {{ color: #abb2bf; font-size: 12px; margin-top: 5px; }}
+                
+                /* 滚动条美化 */
+                ::-webkit-scrollbar {{ width: 4px; }}
+                ::-webkit-scrollbar-thumb {{ background: #2d323b; border-radius: 10px; }}
+            </style>
+        </head>
+        <body onload="init()">
+            <div id="viz"></div>
+            
+            <div id="info-panel" id="panel">
+                <span class="close-btn" onclick="togglePanel(false)">×</span>
+                <div class="title">⚡ MEMORY FRAGMENT</div>
+                <div id="summary" class="summary-box">点击星尘节点...</div>
+                <div class="title" style="font-size: 11px; opacity: 0.7;">ROOT QA TRACE</div>
+                <div id="qa-list"></div>
+            </div>
+
+            <script>
+                let viz;
+                
+                function togglePanel(show) {{
+                    document.getElementById('info-panel').classList.toggle('active', show);
+                }}
+
+                function init() {{
+                    // 延迟加载确保脚本就绪，防止卡死
+                    if (window.NeoVis) {{ draw(); }} 
+                    else {{ setTimeout(init, 200); }}
+                }}
+
+                function draw() {{
+                    const config = {{
+                        containerId: "viz",
+                        neo4j: {{
+                            serverUrl: "{config['serverUrl']}",
+                            serverUser: "{config['user']}",
+                            serverPassword: "{config['pass']}"
+                        }},
+                        labels: {{
+                            "MemoryNode": {{
+                                label: "display",
+                                font: {{ size: 12, color: "#87CEFA" }},
+                                size: 18,
+                                color: "#1d2127",
+                                borderWidth: 2,
+                                borderColor: "#87CEFA"
+                            }}
+                        }},
+                        // 性能优化：限制初始加载并关闭复杂层级布局
+                        initialCypher: "MATCH (n:MemoryNode) RETURN n LIMIT 25",
+                        simulation: {{
+                            enabled: true,
+                            friction: 0.9,
+                            forceManyBody: {{ strength: -100 }}
+                        }}
+                    }};
+
+                    viz = new NeoVis.default(config);
+                    viz.render();
+
+                    viz.registerOnEvent("clickNode", (e) => {{
+                        const p = e.node.properties;
+                        togglePanel(true);
+                        
+                        document.getElementById('summary').innerText = p.full_summary || "Memory trace corrupted.";
+                        
+                        const list = document.getElementById('qa-list');
+                        list.innerHTML = "";
+                        try {{
+                            const qas = JSON.parse(p.qa_json || "[]");
+                            qas.forEach(item => {{
+                                const div = document.createElement('div');
+                                div.className = "qa-card";
+                                div.innerHTML = `<div class="qa-q">Q: ${{item.Q || item.q}}</div><div class="qa-a">A: ${{item.A || item.a}}</div>`;
+                                list.appendChild(div);
+                            }});
+                        }} catch(err) {{
+                            list.innerHTML = "No QA data available.";
+                        }}
+                    }});
+                }}
+            </script>
+        </body>
+        </html>
+        """
+        self.browser.setHtml(html_content)
+
     async def load_memory_tree(self):
-        """重新定义加载逻辑，确保颜色生效"""
-        if not self.memory_manager: return
+        self.tree.setWordWrap(True)
+        self.tree.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.tree.setEditTriggers(self.tree.EditTrigger.NoEditTriggers)
+        self.tree.setIndentation(25) 
+        # 强制列宽填满，防止横向截断
+        self.tree.header().setSectionResizeMode(0, self.tree.header().ResizeMode.Stretch)
+        
+        try:
+            self.tree.itemClicked.disconnect() 
+        except: pass
+        self.tree.itemClicked.connect(lambda item: item.setExpanded(not item.isExpanded()))
+
+        self.tree.setStyleSheet("""
+            QTreeWidget {
+                background-color: #16191d; 
+                color: #dcdcdc;
+                border: 1px solid #2d323b; 
+                border-radius: 12px;
+                outline: none;
+                padding: 8px;
+                font-family: 'Segoe UI', 'PingFang SC', sans-serif;
+            }
+            /* 父节点：增加模糊边框效果 */
+            QTreeWidget::item { 
+                padding: 12px; 
+                margin-bottom: 8px;
+                background-color: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(135, 206, 250, 0.2); /* 淡淡的蓝色边框 */
+                border-radius: 8px;
+                min-height: 40px; 
+            }
+            /* 子节点：去掉边框，保持简洁 */
+            QTreeWidget::item:child {
+                padding: 10px 15px;
+                margin-bottom: 0px;
+                background-color: rgba(135, 206, 250, 0.05);
+                border: none;
+                border-left: 2px solid rgba(135, 206, 250, 0.3); /* 左侧装饰线 */
+                border-radius: 0px;
+                color: #abb2bf;
+            }
+            QTreeWidget::item:hover { 
+                background-color: rgba(135, 206, 250, 0.1);
+                border: 1px solid rgba(135, 206, 250, 0.5); 
+            }
+            QTreeWidget::item:selected { 
+                background-color: rgba(135, 206, 250, 0.2); 
+                color: #87CEFA; 
+                border: 1px solid #87CEFA;
+            }
+            QTreeWidget::branch { image: none; } 
+        """)
+
         self.tree.clear()
         
-        memories = await self.memory_manager.show_memories()
-        
-        for m in memories:
-            root = QTreeWidgetItem(self.tree)
-            root.setText(0, f" 🧠  {m['text']}")
-            root.setForeground(0, QBrush(QColor("#bd93f9"))) # 强制紫色
-            root.setFont(0, QFont("Segoe UI", 10, QFont.Bold))
-            
-            for qa in m['QA']:
-                child = QTreeWidgetItem(root)
-                clean_qa = qa.replace('\n', ' ')
-                child.setText(0, f"    💬 {clean_qa}")
-                child.setForeground(0, QBrush(QColor("#959ca8")))
-                child.setFont(0, QFont("Consolas", 9))
-            
-            meta = QTreeWidgetItem(root)
-            meta.setText(0, f"    🕒 {m['stime']} - {m['etime']}")
-            meta.setForeground(0, QBrush(QColor("#6272a4")))
-            meta.setFont(0, QFont("Segoe UI", 8))
+        try:
+            memories = await self.memory_manager.show_memories(_print=False)
+            if not memories:
+                self.tree.addTopLevelItem(QTreeWidgetItem(self.tree, ["📭 暂无长期记忆数据"]))
+                return
+
+            for m in memories:
+                raw_text = m.get("text", "无内容")
+                node_id = m.get("id", "")
+                qa_list = m.get("QA", [])
+                
+                tree_item = QTreeWidgetItem(self.tree, [f"📝 {raw_text}"])
+                main_font = QFont("Segoe UI", 10)
+                main_font.setBold(True)
+                tree_item.setFont(0, main_font)
+                
+                tree_item.setFlags(tree_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                tree_item.setData(0, Qt.ItemDataRole.UserRole, node_id)
+
+                for qa in qa_list:
+                    if isinstance(qa, dict):
+                        q_text = qa.get("Q") or qa.get("q") or "未记录详情"
+                        a_text = qa.get("A") or qa.get("a") or ""
+                        display_qa = f"Q: {q_text}\nA: {a_text}" if a_text else f"Q: {q_text}"
+                    else:
+                        display_qa = str(qa)
+                        
+                    qa_item = QTreeWidgetItem(tree_item, [display_qa])
+                    sub_font = QFont("Consolas", 9)
+                    qa_item.setFont(0, sub_font)
+                    qa_item.setForeground(0, QColor("#87CEFA"))
+                
+                self.tree.addTopLevelItem(tree_item)
+                
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"❌ 加载记忆树失败: {e}")
 
     def showEvent(self, event):
         super().showEvent(event)
