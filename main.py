@@ -30,6 +30,7 @@ class GlobalVar:
         self.session_id=0
         self.api_task=None
         self.last_audio_done=time()
+        self.user_name="游客"
     def add_var(self,new_config):
         for key,value in new_config.items():
             setattr(self,key,value)
@@ -139,7 +140,6 @@ async def async_speech_part(window):
                 if flag: 
                     date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     date = datetime.strptime(date, "%Y-%m-%d %H:%M:%S")
-                    print(type(date))
                     await mm.add_memory(content,llm_json,date)
                     await mm.add_short_memory(content,llm_res,date)
         logger.info("llm任务结束")
@@ -199,6 +199,9 @@ async def async_speech_part(window):
         interpts=[]
         while not window.DOING.is_set():
             for key,value in window.page_setting.config.items():
+                if window.page_home.user_name!=flags.user_name:
+                    flags.user_name= window.page_home.user_name
+                    mm.user_name=flags.user_name
                 if key=="api_key" and flags.api_key!=value:
                     window.hide()
                     logger.info("api_key改变")
@@ -266,7 +269,6 @@ async def async_speech_part(window):
                     window.page_chat.forbid_change.clear()
             else:await asyncio.sleep(2)
         flags.main_done.set()
-
     try:
         llm_task=asyncio.create_task(run_llm())
         stream_task=asyncio.create_task(run_tts())

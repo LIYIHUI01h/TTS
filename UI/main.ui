@@ -135,7 +135,7 @@ QToolTip { color: #ffffff; background-color: rgba(33, 37, 43, 180); border-left:
          <property name="maximumSize">
           <size>
            <width>60</width>
-           <height>561</height>
+           <height>10000</height>
           </size>
          </property>
          <property name="styleSheet">

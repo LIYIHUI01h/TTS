@@ -102,7 +102,7 @@ class Ui_MainWindow(object):
         self.leftMenuBg = QFrame(self.bgApp)
         self.leftMenuBg.setObjectName(u"leftMenuBg")
         self.leftMenuBg.setMinimumSize(QSize(60, 0))
-        self.leftMenuBg.setMaximumSize(QSize(60, 561))
+        self.leftMenuBg.setMaximumSize(QSize(60, 10000))
         self.leftMenuBg.setStyleSheet(u"#leftMenuBg { background-color: rgb(33, 37, 43); }\n"
 "#leftMenuFrame { border-top: 3px solid rgb(44, 49, 58); }\n"
 "#topLogo {\n"

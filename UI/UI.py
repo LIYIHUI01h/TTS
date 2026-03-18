@@ -8,13 +8,21 @@ import copy
 import psutil
 import aiofiles
 import json
+import shutil
+import hashlib
+import mysql.connector
+from mysql.connector import Error
+from mika.tool import  getLogger
 from mika.api import SiliconCloud_model
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtCore import QEvent, QEasingCurve, QPointF, QTimer, Qt, QPropertyAnimation, QPoint, QRect, QSize, QVariantAnimation
-from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShowEvent, QTextCursor,QPixmap
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QGraphicsDropShadowEffect, QInputDialog, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QSizeGrip, QPushButton, QSlider, QSplitter, QStackedLayout, QTextEdit, QTreeWidget, QTreeWidgetItem, QWidget
+from PySide6.QtCore import QEvent, QEasingCurve, QPointF, QSettings, QTimer, Qt, QPropertyAnimation, QPoint, QRect, QSize, QVariantAnimation
+from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShowEvent, QTextCursor,QPixmap
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGraphicsDropShadowEffect, QGridLayout, QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QSizeGrip, QPushButton, QSizePolicy, QSlider, QSplitter, QStackedLayout, QStackedWidget, QTextEdit, QTreeWidget, QTreeWidgetItem, QWidget
 from qasync import QEventLoop, asyncSlot
 from UI.main_ui import QFrame, QHBoxLayout, QLabel, QVBoxLayout, Ui_MainWindow 
+from llama_index.core.schema import TextNode
+
+logger=getLogger(log_path="log/UI.log",log_name="UI")
 
 class ToastNotification(QWidget):
     def __init__(self, parent, message, color="#87CEFA"):
@@ -89,12 +97,360 @@ class BasePage(QWidget):
         self.container_layout.setContentsMargins(0, 15, 0, 0)
         self.layout.addWidget(self.container, 1)
 
-class HomePage(BasePage):
+
+DB_CONFIG = {
+    'host': 'localhost',
+    'user': 'root',
+    'password': '123456',
+    'database': 'user_names'
+}
+
+def get_round_pixmap(path, size=45):
+    if not path or not os.path.exists(path):
+        return None
+    
+    src = QPixmap(path).scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+    
+    out = QPixmap(size, size)
+    out.fill(Qt.transparent)
+    
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.Antialiasing)
+    
+    path_draw = QPainterPath()
+    path_draw.addEllipse(0, 0, size, size)
+    painter.setClipPath(path_draw)
+    
+    painter.drawPixmap(0, 0, src)
+    painter.end()
+    return out
+
+class LoginDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(360, 420)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        
+        self.settings = QSettings("MikaApp", "LoginSettings")
+        self.logged_user_data = None
+        self.is_reg_mode = False
+        self.init_ui()
+        self.load_last_account()
+
+    def init_ui(self):
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.container = QFrame()
+        self.container.setStyleSheet("""
+            QFrame { background-color: #1d2127; border: 1px solid #3e4451; border-radius: 15px; }
+            #CloseBtn { background: transparent; color: #6272a4; font-size: 18px; border: none; }
+            #CloseBtn:hover { color: #ff5555; }
+            QLabel#Title { color: #bd93f9; font-size: 20px; font-weight: bold; border: none; }
+            QLineEdit { background: #16191d; border-radius: 10px; padding: 12px; color: white; border: 1px solid #3e4451; }
+            QPushButton#ActionBtn { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #bd93f9, stop:1 #8be9fd); 
+                color: #1d2127; font-weight: bold; border-radius: 10px; height: 45px; border: none; 
+            }
+            QPushButton#SwitchBtn { 
+                background: transparent; color: #6272a4; font-size: 11px; border: none; 
+                text-decoration: underline; margin-top: 5px;
+            }
+            QPushButton#SwitchBtn:hover { color: #bd93f9; }
+        """)
+
+        layout = QVBoxLayout(self.container)
+        layout.setContentsMargins(30, 10, 30, 25)
+        layout.setSpacing(15)
+
+        top_bar = QHBoxLayout()
+        top_bar.addStretch()
+        self.close_btn = QPushButton("×")
+        self.close_btn.setObjectName("CloseBtn")
+        self.close_btn.setFixedSize(30, 30)
+        self.close_btn.setCursor(Qt.PointingHandCursor)
+        self.close_btn.clicked.connect(self.reject)
+        top_bar.addWidget(self.close_btn)
+        layout.addLayout(top_bar)
+
+        self.title_label = QLabel("SYSTEM LOGIN")
+        self.title_label.setObjectName("Title")
+        layout.addWidget(self.title_label, alignment=Qt.AlignCenter)
+        
+        layout.addSpacing(5)
+
+        self.acc_i = QLineEdit()
+        self.acc_i.setPlaceholderText("账号")
+        
+        self.pwd_i = QLineEdit()
+        self.pwd_i.setPlaceholderText("密码")
+        self.pwd_i.setEchoMode(QLineEdit.Password)
+        
+        self.name_i = QLineEdit()
+        self.name_i.setPlaceholderText("用户名(称呼)")
+        self.name_i.hide()
+        
+        layout.addWidget(self.acc_i)
+        layout.addWidget(self.pwd_i)
+        layout.addWidget(self.name_i)
+        
+        layout.addStretch()
+
+        self.btn = QPushButton("确 认 登 录")
+        self.btn.setObjectName("ActionBtn")
+        self.btn.clicked.connect(self.handle_action)
+        layout.addWidget(self.btn)
+
+        self.switch_btn = QPushButton("没有账号？点击注册")
+        self.switch_btn.setObjectName("SwitchBtn")
+        self.switch_btn.setCursor(Qt.PointingHandCursor)
+        self.switch_btn.clicked.connect(self.toggle_mode)
+        layout.addWidget(self.switch_btn, alignment=Qt.AlignCenter)
+        
+        self.main_layout.addWidget(self.container)
+
+    def toggle_mode(self):
+        self.is_reg_mode = not self.is_reg_mode
+        if self.is_reg_mode:
+            self.title_label.setText("CREATE ACCOUNT")
+            self.btn.setText("注 册 并 登 录")
+            self.switch_btn.setText("已有账号？返回登录")
+            self.name_i.show()
+            self.setFixedSize(360, 480)
+        else:
+            self.title_label.setText("SYSTEM LOGIN")
+            self.btn.setText("确 认 登 录")
+            self.switch_btn.setText("没有账号？点击注册")
+            self.name_i.hide()
+            self.setFixedSize(360, 420)
+
+    def handle_action(self):
+        if self.is_reg_mode:
+            self.run_registration()
+        else:
+            self.handle_auth()
+
+    def run_registration(self):
+        acc, pwd, name = self.acc_i.text().strip(), self.pwd_i.text().strip(), self.name_i.text().strip()
+        if not acc or not pwd or not name:
+            QMessageBox.warning(self, "错误", "请填写完整注册信息")
+            return
+        try:
+            import mysql.connector
+            conn = mysql.connector.connect(**DB_CONFIG)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM users WHERE account=%s", (acc,))
+            if cursor.fetchone():
+                QMessageBox.warning(self, "错误", "该账号已存在")
+                return
+            pwd_h = hashlib.sha256(pwd.encode()).hexdigest()
+            cursor.execute("INSERT INTO users (account, password_hash, username) VALUES (%s, %s, %s)", (acc, pwd_h, name))
+            conn.commit()
+            conn.close()
+            QMessageBox.information(self, "成功", "注册成功，正在进入系统...")
+            self.handle_auth()
+        except Exception as e:
+            QMessageBox.critical(self, "数据库异常", str(e))
+
+    def handle_auth(self):
+        acc, pwd = self.acc_i.text().strip(), self.pwd_i.text().strip()
+        try:
+            import mysql.connector
+            conn = mysql.connector.connect(**DB_CONFIG)
+            cursor = conn.cursor(dictionary=True)
+            pwd_h = hashlib.sha256(pwd.encode()).hexdigest()
+            cursor.execute("SELECT * FROM users WHERE account=%s AND password_hash=%s", (acc, pwd_h))
+            user = cursor.fetchone()
+            if user:
+                self.settings.setValue("last_account", acc)
+                self.logged_user_data = {
+                    "username": str(user.get("username", "Unknown")),
+                    "uid": str(user.get("id", "0")),
+                    "avatar_path": user.get("profile_photo_path")
+                }
+                self.accept()
+            else:
+                QMessageBox.warning(self, "失败", "账号或密码错误")
+            conn.close()
+        except Exception as e:
+            logger.info(f"授权失败: {e}")
+
+    def load_last_account(self):
+        last_acc = self.settings.value("last_account", "")
+        if last_acc:
+            self.acc_i.setText(last_acc)
+            self.pwd_i.setFocus()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.LeftButton:
+            self.move(event.globalPosition().toPoint() - self.drag_pos)
+            event.accept()
+
+    def get_user_info(self):
+        return self.logged_user_data
+
+class ProfileHoverCard(QFrame):
+    def __init__(self, parent=None, login_cb=None, logout_cb=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.login_cb, self.logout_cb = login_cb, logout_cb
+        self.target_avatar = None
+        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(280, 320)
+        
+        self.timer = QTimer(self); self.timer.timeout.connect(self._check_mouse)
+        
+        self.setStyleSheet("""
+            #main { background-color: #21252b; border: 1px solid #3e4451; border-radius: 12px; }
+            QLabel { color: #abb2bf; font-family: 'Microsoft YaHei'; }
+            QPushButton#login { background-color: #bd93f9; color: white; border-radius: 8px; font-weight: bold; height: 40px; border: none; }
+            QPushButton#logout { color: #ff5555; background: transparent; border: 1px solid #ff5555; border-radius: 6px; padding: 5px; }
+        """)
+        
+        l = QVBoxLayout(self); l.setContentsMargins(0,0,0,0)
+        self.main = QFrame(); self.main.setObjectName("main"); l.addWidget(self.main)
+        self.stack = QStackedWidget(); QVBoxLayout(self.main).addWidget(self.stack)
+        
+        self.p0 = QWidget(); l0 = QVBoxLayout(self.p0); l0.setContentsMargins(25,40,25,40)
+        btn_in = QPushButton("立即登录"); btn_in.setObjectName("login"); btn_in.clicked.connect(self._on_in)
+        l0.addWidget(QLabel("登录后即可体验更多功能"), alignment=Qt.AlignCenter); l0.addStretch(); l0.addWidget(btn_in)
+        self.stack.addWidget(self.p0)
+        
+        self.p1 = QWidget(); l1 = QVBoxLayout(self.p1); l1.setContentsMargins(25,30,25,25)
+        self.u_av = QLabel(); self.u_av.setFixedSize(70, 70)
+        self.u_na = QLabel(); self.u_na.setStyleSheet("font-size: 16px; font-weight: bold; color: white;")
+        self.u_id = QLabel(); self.u_id.setStyleSheet("font-size: 11px; color: #717e95;")
+        btn_out = QPushButton("退出登录"); btn_out.setObjectName("logout"); btn_out.clicked.connect(self._on_out)
+        
+        l1.addWidget(self.u_av, alignment=Qt.AlignCenter); l1.addWidget(self.u_na, alignment=Qt.AlignCenter)
+        l1.addWidget(self.u_id, alignment=Qt.AlignCenter); l1.addStretch(); l1.addWidget(btn_out)
+        self.stack.addWidget(self.p1)
+
+    def set_user_data(self, data):
+        if data:
+            self.u_na.setText(data['username'])
+            self.u_id.setText(f"UID: {data['uid']}")
+            pix = get_round_pixmap(data.get('avatar_path'), 70)
+            if pix: self.u_av.setPixmap(pix)
+            else: 
+                self.u_av.setText(data['username'][0].upper())
+                self.u_av.setStyleSheet("background: #bd93f9; border-radius: 35px; color: white; font-size: 28px; font-weight: bold;")
+            self.stack.setCurrentIndex(1)
+        else: self.stack.setCurrentIndex(0)
+
+    def show_safe(self, pos, target):
+        self.target_avatar = target; self.move(pos); self.show(); self.timer.start(80)
+
+    def _check_mouse(self):
+        if not self.isVisible(): return
+        p = QCursor.pos()
+        in_card = self.geometry().contains(p)
+        in_avatar = False
+        if self.target_avatar:
+            gp = self.target_avatar.mapToGlobal(QPoint(0,0))
+            rect = QRect(gp.x()-10, gp.y()-10, self.target_avatar.width()+20, self.target_avatar.height()+45)
+            in_avatar = rect.contains(p)
+        if not in_card and not in_avatar: self.hide(); self.timer.stop()
+
+    def _on_in(self): self.hide(); self.login_cb()
+    def _on_out(self): self.logout_cb(); self.set_user_data(None)
+
+class HomePage(QWidget):
     def __init__(self):
-        super().__init__("DASHBOARD", "系统运行状态实时概览")
-        label = QLabel("欢迎回来，这是主页内容。")
-        label.setStyleSheet("color: #888; font-size: 14px;")
-        self.container_layout.addWidget(label, alignment=Qt.AlignTop)
+        super().__init__()
+        self.user_name="游客"
+        self.user_data = None
+        self.hover_card = None
+        self.init_ui()
+
+    def init_ui(self):
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+    
+        header = QWidget()
+        header.setFixedHeight(100)
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(40, 20, 40, 0)
+    
+        self.page_title = QLabel("SYSTEM LOGS")
+        self.page_title.setStyleSheet("color: white; font-size: 28px; font-weight: bold; background: transparent;")
+        
+        self.top_avatar = QLabel("?")
+        self.top_avatar.setFixedSize(45, 45)
+        self.top_avatar.setAlignment(Qt.AlignCenter)
+        self.top_avatar.setStyleSheet("""
+            QLabel {
+                background: #2d323b; 
+                border: 2px solid white; 
+                border-radius: 22px; 
+                color: white;
+            }
+        """)
+        
+        self.top_avatar.installEventFilter(self)
+        
+        h_layout.addWidget(self.page_title)
+        h_layout.addStretch() 
+        h_layout.addWidget(self.top_avatar)
+    
+        self.main_layout.addWidget(header)
+        
+        self.sub_tip = QLabel("支持多窗口对齐查看与实时跟踪")
+        self.sub_tip.setStyleSheet("color: #5c6370; margin-left: 40px; background: transparent;")
+        self.main_layout.addWidget(self.sub_tip)
+        self.main_layout.addStretch()
+
+    def eventFilter(self, watched, event):
+        if watched == self.top_avatar:
+            if event.type() == QEvent.Enter:
+                self._handle_avatar_hover()
+                return True 
+        return super().eventFilter(watched, event)
+
+    def _handle_avatar_hover(self):
+        if not self.hover_card:
+            self.hover_card = ProfileHoverCard(self.window(), self._exec_login, self._exec_logout)
+
+        self.hover_card.set_user_data(self.user_data)
+        
+        gp = self.top_avatar.mapToGlobal(QPoint(0, 0))
+        
+        target_x = gp.x() - self.hover_card.width() + self.top_avatar.width()
+        target_y = gp.y() + self.top_avatar.height() + 5
+        
+        self.hover_card.show_safe(QPoint(target_x, target_y), self.top_avatar)
+
+    def _exec_login(self):
+        d = LoginDialog(self)
+        if d.exec():
+            self.user_data = d.get_user_info()
+            if self.user_data:self.user_name=self.user_data.get("username","游客")
+            self.page_title.setText("USER PROFILE")
+            self.sub_tip.setText("管理您的个人账户信息与偏好设置")
+            
+            path = self.user_data.get("avatar_path")
+            pix = get_round_pixmap(path, 45) 
+            if pix:
+                self.top_avatar.setPixmap(pix)
+                self.top_avatar.setText("")
+            
+            if self.hover_card:
+                self.hover_card.set_user_data(self.user_data)
+
+    def _exec_logout(self):
+        self.user_data = None
+        self.page_title.setText("SYSTEM LOGS")
+        self.sub_tip.setText("支持多窗口对齐查看与实时跟踪")
+        self.top_avatar.setPixmap(QPixmap()) 
+        self.top_avatar.setText("?") 
 
 class ChatPage(QWidget):
     def __init__(self):
@@ -242,16 +598,14 @@ class LogPage(BasePage):
         self.layout.setContentsMargins(15, 10, 15, 0) 
         self.log_dir = r"D:\filedir\github\my\TTS\log"
         self.viewers = [] 
-        self.floating_log_win = None # 存储弹出窗口引用
+        self.floating_log_win = None
 
-        # 1. 布局初始化
         sub_title_label = self.layout.itemAt(1).widget() 
         self.sub_header_row = QHBoxLayout()
         self.sub_header_row.setContentsMargins(0, 0, 0, 0)
         self.sub_header_row.addWidget(sub_title_label)
         self.sub_header_row.addStretch() 
 
-        # 2. 按钮样式与创建
         btn_style = """
             QPushButton { 
                 background: #343b48; border-radius: 4px; padding: 6px 15px; 
@@ -260,9 +614,8 @@ class LogPage(BasePage):
             QPushButton:hover { background: #4b5465; border: 1px solid #87CEFA; }
         """
         
-        # 新增弹出窗口按钮
         self.float_log_btn = QPushButton("弹出监控 ↗")
-        self.float_log_btn.setStyleSheet(btn_style.replace("#343b48", "#bd93f9")) # 使用紫色区分
+        self.float_log_btn.setStyleSheet(btn_style.replace("#343b48", "#bd93f9")) 
         
         self.add_view_btn = QPushButton("添加分屏 +")
         self.del_view_btn = QPushButton("移除分屏 -")
@@ -270,8 +623,7 @@ class LogPage(BasePage):
         self.add_view_btn.setStyleSheet(btn_style)
         self.del_view_btn.setStyleSheet(btn_style)
         
-        # 3. 组装标题栏
-        self.sub_header_row.addWidget(self.float_log_btn) # 先放弹出按钮
+        self.sub_header_row.addWidget(self.float_log_btn)
         self.sub_header_row.addSpacing(20)
         self.sub_header_row.addWidget(self.add_view_btn)
         self.sub_header_row.addSpacing(10)
@@ -279,19 +631,16 @@ class LogPage(BasePage):
 
         self.layout.insertLayout(1, self.sub_header_row)
 
-        # 4. 内容区域配置
         self.container_layout.setContentsMargins(0, 0, 0, 0)
         self.container_layout.setSpacing(0)
         self.splitter = QSplitter(Qt.Horizontal) 
         self.splitter.setStyleSheet("QSplitter::handle { background: #3e4451; width: 1px; }")
         self.container_layout.addWidget(self.splitter)
 
-        # 5. 事件绑定
         self.add_view_btn.clicked.connect(self.add_viewer)
         self.del_view_btn.clicked.connect(self.remove_viewer)
-        self.float_log_btn.clicked.connect(self.open_floating_log) # 绑定弹出逻辑
+        self.float_log_btn.clicked.connect(self.open_floating_log)
 
-        # 6. 初始化显示
         self.log_task = None
         self.add_viewer()
 
@@ -324,7 +673,7 @@ class LogPage(BasePage):
             except asyncio.CancelledError:
                 break 
             except Exception as e:
-                print(f"Log Update Error: {e}")
+                self.logger.info(f"日志更新出错: {e}")
                 await asyncio.sleep(5)
 
     async def refresh_all_viewers(self):
@@ -365,7 +714,7 @@ class LogPage(BasePage):
                 if at_bottom:
                     display_widget.moveCursor(QTextCursor.End)
         except Exception as e:
-            print(f"Read File Error ({filename}): {e}")
+            self.logger.info(f"文件读取出错({filename}): {e}")
 
     def add_viewer(self):
         if len(self.viewers) >= 3:
@@ -542,7 +891,6 @@ class FloatingMonitor(QWidget):
 class MonitorPage(BasePage):
     def __init__(self):
         super().__init__("PERFORMANCE", "硬件资源实时负载监控")
-        # --- 以下完全保留你的原始初始化逻辑 ---
         self.layout.setContentsMargins(10, 5, 10, 0)
         
         sub_title_label = self.layout.itemAt(1).widget()
@@ -574,7 +922,6 @@ class MonitorPage(BasePage):
         except: pass
 
         grid = QVBoxLayout()
-        # 调用你的原始函数，返回 (bar, label) 元组
         self.cpu_data = self.add_monitor_item("CPU 处理器负载", grid)
         self.mem_data = self.add_monitor_item("RAM 内存占用", grid)
         self.gpu_data = self.add_monitor_item("GPU 显存占用", grid)
@@ -585,7 +932,6 @@ class MonitorPage(BasePage):
         self.monitor_task = None
         self.floating_win = None
 
-    # --- 启停控制：解决卡死的核心 ---
     def showEvent(self, event):
         super().showEvent(event)
         if self.monitor_task is None or self.monitor_task.done():
@@ -601,11 +947,9 @@ class MonitorPage(BasePage):
         if not self.floating_win: self.floating_win = FloatingMonitor()
         self.floating_win.show()
 
-    # --- 完全保留你的变色逻辑和元组索引更新 ---
     async def update_stats(self):
         while True:
             try:
-                # 检查是否需要采样（主界面显示中 或 独立窗口显示中）
                 main_active = False
                 try:
                     main_active = self.window().stackedWidget.currentWidget() == self
@@ -624,17 +968,14 @@ class MonitorPage(BasePage):
                         except: pass
 
                     if main_active:
-                        # CPU 更新
                         self.cpu_data[0].setValue(int(cpu))
                         self.update_bar_style(self.cpu_data[0], cpu, self.cpu_data[1])
                         self.cpu_data[1].setText(f"{int(cpu)}%")
                         
-                        # RAM 更新
                         self.mem_data[0].setValue(int(mem))
                         self.update_bar_style(self.mem_data[0], mem, self.mem_data[1])
                         self.mem_data[1].setText(f"{int(mem)}%")
                         
-                        # GPU 更新
                         self.gpu_data[0].setValue(int(gpu_percent))
                         self.update_bar_style(self.gpu_data[0], gpu_percent, self.gpu_data[1])
                         self.gpu_data[1].setText(f"{int(gpu_percent)}%")
@@ -646,14 +987,13 @@ class MonitorPage(BasePage):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                print(f"Monitor Error: {e}")
+                self.logger.info(f"性能监视出错: {e}")
                 await asyncio.sleep(1)
 
-    # --- 你的变色逻辑：原封不动 ---
     def update_bar_style(self, bar, value, label):
-        color = "#87CEFA" # 默认蓝色
-        if value > 80: color = "#ff5555" # 危险红色
-        elif value > 60: color = "#ffb86c" # 警告橙色
+        color = "#87CEFA" 
+        if value > 80: color = "#ff5555" 
+        elif value > 60: color = "#ffb86c" 
         
         label.setStyleSheet(f"color: {color}; font-weight: bold; font-family: 'Consolas'; font-size: 14px;")
         bar.setStyleSheet(f"""
@@ -661,7 +1001,6 @@ class MonitorPage(BasePage):
             QProgressBar::chunk {{ background-color: {color}; border-radius: 4px; }}
         """)
 
-    # --- 你的布局逻辑：原封不动 ---
     def add_monitor_item(self, name, layout):
         item_w = QWidget()
         v_layout = QVBoxLayout(item_w)
@@ -686,8 +1025,7 @@ class MonitorPage(BasePage):
         v_layout.addWidget(bar)
         
         layout.addWidget(item_w)
-        return (bar, value_lbl) # 返回元组，匹配 [0] 和 [1] 的用法
-
+        return (bar, value_lbl) 
     def __del__(self):
         if hasattr(self, 'gpu_enabled') and self.gpu_enabled:
             try: pynvml.nvmlShutdown()
@@ -1047,13 +1385,11 @@ class MemoryPage(BasePage):
         self.layout.setContentsMargins(25, 20, 25, 15)
         self.memory_manager = None
         
-        # 1. 顶部操作栏
         sub_title_label = self.layout.itemAt(1).widget()
         self.header_row = QHBoxLayout()
         self.header_row.addWidget(sub_title_label)
         self.header_row.addStretch()
 
-        # 搜索框美化
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText(" 🔍 搜索关键词...")
         self.search_input.setFixedWidth(240)
@@ -1066,7 +1402,6 @@ class MemoryPage(BasePage):
         """)
         self.search_input.textChanged.connect(self.search_tree)
 
-        # 按钮美化：记忆图谱界面
         self.edit_mode_btn = QPushButton("记忆图谱界面 ↗")
         self.edit_mode_btn.setFixedSize(140, 34)
         self.edit_mode_btn.setCursor(Qt.PointingHandCursor)
@@ -1079,7 +1414,6 @@ class MemoryPage(BasePage):
             QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7283b5, stop:1 #caabf1); }
         """)
         
-        # 添加阴影感
         shadow = QGraphicsDropShadowEffect()
         shadow.setBlurRadius(15)
         shadow.setColor(QColor(189, 147, 249, 80))
@@ -1091,14 +1425,12 @@ class MemoryPage(BasePage):
         self.header_row.addWidget(self.edit_mode_btn)
         self.layout.insertLayout(1, self.header_row)
 
-        # 2. 树形控件美化 (强制渲染样式)
         self.tree = QTreeWidget()
         self.tree.setColumnCount(1)
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(20)
         self.tree.setAnimated(True)
         
-        # 核心美化：自定义指示器样式，避免使用图片路径
         self.tree.setStyleSheet("""
             QTreeWidget {
                 background-color: #16191d; color: #abb2bf;
@@ -1125,7 +1457,6 @@ class MemoryPage(BasePage):
 
     def load_graph(self):
         """加载优化后的 3D 悬浮感记忆星图"""
-        # 配置信息
         config = {
             "serverUrl": "bolt://localhost:7687",
             "user": "neo4j",
@@ -1283,7 +1614,6 @@ class MemoryPage(BasePage):
         self.tree.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.tree.setEditTriggers(self.tree.EditTrigger.NoEditTriggers)
         self.tree.setIndentation(25) 
-        # 强制列宽填满，防止横向截断
         self.tree.header().setSectionResizeMode(0, self.tree.header().ResizeMode.Stretch)
         
         try:
@@ -1371,7 +1701,7 @@ class MemoryPage(BasePage):
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print(f"❌ 加载记忆树失败: {e}")
+            self.logger.info(f"❌ 加载记忆树失败: {e}")
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1387,181 +1717,260 @@ class MemoryPage(BasePage):
             while p: p.setHidden(False); p.setExpanded(True); p = p.parent()
 
     def verify_and_open_editor(self):
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("权限验证")
-        msg_box.setText("进入记忆图谱管理界面需要管理员权限。")
-
-        msg_box.setStyleSheet("""
-            QMessageBox {
-                background-color: #1d2127;
-                border: 1px solid #87CEFA;
+        dialog = QDialog(self)
+        dialog.setWindowTitle("权限验证")
+        dialog.setFixedWidth(350)
+        dialog.setStyleSheet("""
+            QDialog { background-color: #1d2127; border: 1px solid #87CEFA; }
+            QLabel { color: #ffffff; font-family: 'Microsoft YaHei'; }
+            QLineEdit { background: #16191d; color: white; border: 1px solid #444444; padding: 5px; }
+            QPushButton { 
+                border: 1px solid #87CEFA; border-radius: 3px; padding: 5px 15px;
+                background: transparent; color: #87CEFA; min-width: 80px;
             }
-            QLabel {
-                color: #ffffff;
-                font-family: 'Microsoft YaHei';
-                padding: 10px;
-                min-width: 300px;
-            }
-            QPushButton {
-                border: 1px solid #87CEFA;
-                border-radius: 3px;
-                padding: 5px 15px;
-                background: transparent;
-                color: #87CEFA;
-                font-family: 'Microsoft YaHei';
-                min-width: 80px;
-            }
-            QPushButton:hover {
-                background-color: rgba(135, 206, 250, 0.1);
-            }
+            QPushButton:hover { background-color: rgba(135, 206, 250, 0.1); }
         """)
 
-        pwd_input = QLineEdit(msg_box)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("进入管理界面需要管理员权限："))
+
+        pwd_input = QLineEdit()
         pwd_input.setEchoMode(QLineEdit.Password)
         pwd_input.setPlaceholderText("请输入管理密码...")
-        pwd_input.setStyleSheet("background: #16191d; color: white; border: 1px solid #444444; margin: 10px;")
-        pwd_input.setFixedWidth(280)
-        msg_box.layout().addWidget(pwd_input, 1, 1)
+        layout.addWidget(pwd_input)
 
-        yes_btn = msg_box.addButton("确认进入", QMessageBox.YesRole)
-        no_btn = msg_box.addButton("取消", QMessageBox.NoRole)
-        no_btn.setStyleSheet("color: #888888; border-color: #444444;")
+        btn_layout = QHBoxLayout()
+        yes_btn = QPushButton("确认进入")
+        no_btn = QPushButton("取消")
+        btn_layout.addWidget(no_btn)
+        btn_layout.addWidget(yes_btn)
+        layout.addLayout(btn_layout)
 
-        msg_box.exec()
+        yes_btn.clicked.connect(dialog.accept)
+        no_btn.clicked.connect(dialog.reject)
 
-        if msg_box.clickedButton() == yes_btn:
-            if pwd_input.text() == "121176": 
+        if dialog.exec() == QDialog.Accepted:
+            if pwd_input.text() == "121176":
                 self.open_editor()
             else:
-                self.window().notify("密码错误", "error")
+                self.logger.info("密码错误") 
+                if hasattr(self.window(), 'notify'):
+                    self.window().notify("密码错误", "error")
 
     def open_editor(self):
-        if not self.editor_window:
-            self.editor_window = MemoryEditorWindow(self.memory_manager)
-        self.editor_window.show()
-        self.editor_window.raise_()
+        try:
+            if self.editor_window is None:
+                self.editor_window = MemoryEditorWindow(self.memory_manager)
+            
+            self.editor_window.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
+            self.editor_window.show()
+            self.editor_window.raise_()
+            self.editor_window.activateWindow()
+            
+            asyncio.create_task(self.editor_window.refresh_data())
+        except Exception as e:
+            self.logger.info(f"❌ 弹窗失败: {e}")
+            self.editor_window = None 
 
 class MemoryEditorWindow(QWidget):
     def __init__(self, memory_manager):
         super().__init__()
-        # 1. 窗口基础：对齐 SettingPage 风格
-        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
         self.memory_manager = memory_manager
-        self.resize(1100, 800)
+        self.current_data = None
+        self.pending_updates = {} 
+        self.pending_deletes = set()
         
-        # 2. 外壳容器
-        self.main_container = QFrame(self)
-        self.main_container.setGeometry(0, 0, 1100, 800)
-        self.main_container.setStyleSheet("""
-            QFrame {
-                background-color: #0a0b10;
-                border: 1px solid #87CEFA;
-                border-radius: 12px;
-            }
+        self.setWindowTitle("MEMORY EDITOR - 核心记忆修正协议")
+        self.resize(900, 650) 
+        self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
+        
+        self.init_ui()
+        
+    def init_ui(self):
+        self.setStyleSheet("""
+            QWidget { background-color: #16191d; color: #abb2bf; font-family: 'Segoe UI', 'Microsoft YaHei'; }
+            QListWidget { background-color: #1d2127; border: 1px solid #2d323b; border-radius: 10px; outline: none; }
+            QListWidget::item { padding: 12px; border-bottom: 1px solid #2d323b; color: #dcdcdc; }
+            QListWidget::item:selected { background-color: #2c313c; border-left: 5px solid #bd93f9; color: #87CEFA; }
+            QCheckBox { color: #6272a4; font-size: 11px; font-weight: bold; }
+            QTextEdit { background: #16191d; border: 1px solid #3e4451; border-radius: 8px; padding: 10px; font-size: 13px; line-height: 1.4; }
+            QLineEdit { background: #1d2127; border-radius: 15px; padding: 6px 12px; border: 1px solid #3e4451; }
+            QPushButton#SaveBtn { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #bd93f9, stop:1 #ff79c6); color: white; padding: 10px 25px; border-radius: 18px; font-weight: bold; }
+            QPushButton#DelBtn { color: #ff5555; border: 1px solid #ff5555; padding: 6px; border-radius: 6px; }
         """)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(15, 15, 15, 10)
+
+        header = QHBoxLayout()
+        title_label = QLabel("🧠 核心事实编辑器")
+        title_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #87CEFA;")
+        self.search_bar = QLineEdit()
+        self.search_bar.setPlaceholderText(" 🔍 搜索记忆碎片...")
+        self.search_bar.setFixedWidth(250)
+        self.search_bar.textChanged.connect(self.filter_items)
+        header.addWidget(title_label)
+        header.addStretch()
+        header.addWidget(self.search_bar)
+        main_layout.addLayout(header)
+
+        self.splitter = QSplitter(Qt.Horizontal)
         
-        # 3. 布局
-        layout = QVBoxLayout(self.main_container)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # 4. 标题栏
-        self.init_title_bar(layout)
-
-        # 5. 可视化核心区
-        self.viz_container = QFrame()
-        self.viz_container.setStyleSheet("border: none; background: transparent;")
-        viz_layout = QVBoxLayout(self.viz_container)
+        self.list_widget = QListWidget()
+        self.list_widget.itemSelectionChanged.connect(self.on_selection_changed)
         
-        # 创建浏览器组件
-        self.browser = QWebEngineView()
-        self.browser.setStyleSheet("background: transparent;")
-        viz_layout.addWidget(self.browser)
+        self.edit_panel = QFrame()
+        self.edit_panel.setStyleSheet("background: #1d2127; border-radius: 12px; border: 1px solid #2d323b;")
+        panel_layout = QVBoxLayout(self.edit_panel)
+        panel_layout.setContentsMargins(15, 15, 15, 15)
+
+        fact_bar = QHBoxLayout()
+        fact_bar.addWidget(QLabel("📝 事实陈述 (Node Text)"))
+        self.fact_lock_cb = QCheckBox("开启编辑模式")
+        self.fact_lock_cb.stateChanged.connect(self.toggle_fact_edit)
+        fact_bar.addStretch()
+        fact_bar.addWidget(self.fact_lock_cb)
+        panel_layout.addLayout(fact_bar)
         
-        layout.addWidget(self.viz_container)
+        self.text_editor = QTextEdit()
+        self.text_editor.setReadOnly(True)
+        self.text_editor.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding) 
+        panel_layout.addWidget(self.text_editor)
 
-        # 6. 延迟加载防止卡死
-        QTimer.singleShot(500, self.load_graph)
+        qa_bar = QHBoxLayout()
+        qa_bar.addWidget(QLabel("📂 溯源素材 (Root QA Trace)"))
+        self.qa_lock_cb = QCheckBox("编辑原始对话")
+        self.qa_lock_cb.stateChanged.connect(self.toggle_qa_edit)
+        qa_bar.addStretch()
+        qa_bar.addWidget(self.qa_lock_cb)
+        panel_layout.addLayout(qa_bar)
 
-    def init_title_bar(self, parent_layout):
-        title_bar = QFrame()
-        title_bar.setFixedHeight(50)
-        title_bar.setStyleSheet("background: rgba(135, 206, 250, 0.05); border-bottom: 1px solid #2c313c;")
+        self.qa_display = QTextEdit()
+        self.qa_display.setReadOnly(True) 
+        self.qa_display.setStyleSheet("color: #6272a4; background: #1a1d22;")
+        self.qa_display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        panel_layout.addWidget(self.qa_display)
+
+        btn_layout = QHBoxLayout()
+        self.del_btn = QPushButton(" 🗑 彻底遗忘 ")
+        self.del_btn.setObjectName("DelBtn")
+        self.del_btn.clicked.connect(self.delete_current_memory)
+        self.save_btn = QPushButton(" ⚡ 暂存修改 ")
+        self.save_btn.setObjectName("SaveBtn")
+        self.save_btn.clicked.connect(self.save_to_cache)
+        btn_layout.addWidget(self.del_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.save_btn)
+        panel_layout.addLayout(btn_layout)
+
+        self.splitter.addWidget(self.list_widget)
+        self.splitter.addWidget(self.edit_panel)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 3)
+        main_layout.addWidget(self.splitter)
+
+        self.status_bar = QLabel("系统就绪 | 等待节点选择")
+        self.status_bar.setStyleSheet("color: #6272a4; font-size: 11px; padding-top: 5px;")
+        main_layout.addWidget(self.status_bar)
+
+    def toggle_fact_edit(self, state):
+        is_unlocked = (state == 2)
+        self.text_editor.setReadOnly(not is_unlocked)
+        self.text_editor.setStyleSheet(f"border: 1px solid {'#bd93f9' if is_unlocked else '#3e4451'};")
+
+    def toggle_qa_edit(self, state):
+        self.qa_display.setReadOnly(state != 2)
+
+    def filter_items(self, text):
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            item.setHidden(text.lower() not in item.text().lower())
+
+    async def refresh_data(self):
+        try:
+            self.status_bar.setText("⏳ 正在同步全量记忆...")
+            self.list_widget.clear()
+            memories = await self.memory_manager.show_memories(_print=False)
+            if not memories:
+                self.status_bar.setText("📭 记忆库为空")
+                return
+            for m in memories:
+                m['_raw_text'] = m.get('text', '') 
+                m['_raw_qa'] = list(m.get('QA', []))
+                preview = m.get('text', 'Empty').replace('\n', ' ')
+                item = QListWidgetItem(f"ID: {m['id'][:8]}... | {preview[:25]}...")
+                item.setData(Qt.UserRole, m)
+                self.list_widget.addItem(item)
+            self.status_bar.setText(f"✅ 已加载 {len(memories)} 个节点")
+        except Exception as e:
+            self.status_bar.setText(f"❌ 加载失败: {str(e)}")
+
+    def on_selection_changed(self):
+        selected = self.list_widget.selectedItems()
+        if not selected: return
+        data = selected[0].data(Qt.UserRole)
+        self.current_data = data
+        self.text_editor.setPlainText(data.get('text', ''))
+        qa_list = data.get('QA', [])
+        self.qa_display.setPlainText("\n\n".join(qa_list) if qa_list else "无溯源素材")
+        self.fact_lock_cb.setChecked(False)
+        self.qa_lock_cb.setChecked(False)
+
+    def save_to_cache(self):
+        if not self.current_data: return
+        node_id = self.current_data['id']
+        new_text = self.text_editor.toPlainText().strip()
+        new_qa = self.qa_display.toPlainText().split('\n\n')
+
+        if new_text == self.current_data.get('_raw_text') and new_qa == self.current_data.get('_raw_qa'):
+            self.status_bar.setText("ℹ️ 内容未变动")
+            return
+
+        self.current_data['text'] = new_text
+        self.current_data['QA'] = new_qa
+        self.pending_updates[node_id] = self.current_data
         
-        bar_layout = QHBoxLayout(title_bar)
-        title_label = QLabel("🧠 NEURAL GRAPH ENGINE / Neo4j 记忆知识图谱")
-        title_label.setStyleSheet("color: #87CEFA; font-weight: bold; border: none;")
-        
-        close_btn = QPushButton("✕")
-        close_btn.setFixedSize(30, 30)
-        close_btn.setCursor(Qt.PointingHandCursor)
-        close_btn.setStyleSheet("""
-            QPushButton { background: transparent; color: #87CEFA; border: 1px solid #87CEFA; border-radius: 15px; }
-            QPushButton:hover { background: #ff5555; color: white; border-color: #ff5555; }
-        """)
-        close_btn.clicked.connect(self.close)
-        
-        bar_layout.addWidget(title_label)
-        bar_layout.addStretch()
-        bar_layout.addWidget(close_btn)
-        parent_layout.addWidget(title_bar)
+        selected_item = self.list_widget.selectedItems()[0]
+        selected_item.setData(Qt.UserRole, self.current_data)
+        selected_item.setForeground(QColor("#bd93f9"))
+        self.status_bar.setText(f"✨ 节点 {node_id[:8]} 已暂存")
 
-    def load_graph(self):
-        """加载集成了 NeoVis.js 的 HTML 页面"""
-        config = {
-            "serverUrl": "bolt://localhost:7687",
-            "user": "neo4j",
-            "pass": "your_password"
-        }
+    def delete_current_memory(self):
+        if not self.current_data: return
+        node_id = self.current_data['id']
+        if QMessageBox.question(self, "彻底遗忘", "确定删除该节点？") == QMessageBox.Yes:
+            self.pending_deletes.add(node_id)
+            self.list_widget.takeItem(self.list_widget.currentRow())
+            self.text_editor.clear()
+            self.current_data = None
 
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <script src="https://unpkg.com/neovis.js@2.1.0/dist/neovis.js"></script>
-            <style>
-                body {{ background-color: #0a0b10; margin: 0; overflow: hidden; }}
-                #viz {{ width: 100vw; height: 100vh; }}
-            </style>
-        </head>
-        <body onload="draw()">
-            <div id="viz"></div>
-            <script>
-                function draw() {{
-                    const drawConfig = {{
-                        containerId: "viz",
-                        neo4j: {{
-                            serverUrl: "{config['serverUrl']}",
-                            serverUser: "{config['user']}",
-                            serverPassword: "{config['pass']}"
-                        }},
-                        labels: {{
-                            "Memory": {{
-                                label: "content",
-                                font: {{ size: 12, color: "#ffffff" }},
-                                color: "#87CEFA"
-                            }}
-                        }},
-                        initialCypher: "MATCH (n)-[r]->(m) RETURN n,r,m LIMIT 30"
-                    }};
-                    const viz = new NeoVis.default(drawConfig);
-                    viz.render();
-                }}
-            </script>
-        </body>
-        </html>
-        """
-        self.browser.setHtml(html_content)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+    def closeEvent(self, event):
+        if not self.pending_updates and not self.pending_deletes:
             event.accept()
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.LeftButton:
-            self.move(event.globalPosition().toPoint() - self.drag_pos)
+            return
+        reply = QMessageBox.question(self, '同步确认', "是否保存修改到数据库？", QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+        if reply == QMessageBox.Yes:
+            asyncio.create_task(self._do_final_sync())
             event.accept()
+        elif reply == QMessageBox.No:
+            event.accept()
+        else:
+            event.ignore()
+
+    async def _do_final_sync(self):
+        try:
+            if self.pending_deletes:
+                await self.memory_manager.aclient.delete(collection_name=self.memory_manager.collection_name, points_selector=list(self.pending_deletes))
+            if self.pending_updates:
+                update_nodes = []
+                for node_id, data in self.pending_updates.items():
+                    new_vector = await self.memory_manager.api_embedding.start(content=data['text'])
+                    node = TextNode(id_=node_id, text=data['text'], metadata={"QA": data['QA'], "display_time": data['stime'].strftime("%Y-%m-%d %H:%M:%S"), "last_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "stimestamp": int(data['stime'].timestamp()), "etimestamp": int(datetime.now().timestamp())})
+                    node.excluded_embed_metadata_keys = ["QA", "display_time", "last_time", "stimestamp", "etimestamp"]
+                    object.__setattr__(node, 'embedding', new_vector)
+                    update_nodes.append(node)
+                if update_nodes: await self.memory_manager.index.ainsert_nodes(update_nodes)
+        except Exception as e: self.logger.info(f"❌ 同步失败: {e}")
 
 class MyWindow(QMainWindow, Ui_MainWindow):
     def __init__(self):
@@ -1689,13 +2098,3 @@ class MyWindow(QMainWindow, Ui_MainWindow):
             "error": "#ff5555"
         }
         ToastNotification(self, message, colors.get(level, "#87CEFA"))
-
-# if __name__ == "__main__":
-#     app = QApplication(sys.argv)
-#     loop = QEventLoop(app)
-#     asyncio.set_event_loop(loop) 
-    
-#     with loop:
-#         window = MyWindow()
-#         window.show()
-#         loop.run_forever() 
