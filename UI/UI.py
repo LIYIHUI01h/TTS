@@ -1,3 +1,4 @@
+import base64
 import math
 import os
 import sys
@@ -15,9 +16,9 @@ from mysql.connector import Error
 from mika.tool import  getLogger
 from mika.api import SiliconCloud_model
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtCore import QEvent, QEasingCurve, QPointF, QSettings, QTimer, Qt, QPropertyAnimation, QPoint, QRect, QSize, QVariantAnimation
-from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShowEvent, QTextCursor,QPixmap
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGraphicsDropShadowEffect, QGridLayout, QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QSizeGrip, QPushButton, QSizePolicy, QSlider, QSplitter, QStackedLayout, QStackedWidget, QTextEdit, QTreeWidget, QTreeWidgetItem, QWidget
+from PySide6.QtCore import QAbstractAnimation, QBuffer, QEvent, QEasingCurve, QIODevice, QMimeData, QParallelAnimationGroup, QPointF, QSettings, QTimer, Qt, QPropertyAnimation, QPoint, QRect, QSize, QVariantAnimation, Signal
+from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QIcon, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShowEvent, QTextCursor,QPixmap
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QGraphicsProxyWidget, QGraphicsScene, QGraphicsView, QGridLayout, QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QScrollArea, QSizeGrip, QPushButton, QSizePolicy, QSlider, QSplitter, QStackedLayout, QStackedWidget, QTextEdit, QTreeWidget, QTreeWidgetItem, QWidget
 from qasync import QEventLoop, asyncSlot
 from UI.main_ui import QFrame, QHBoxLayout, QLabel, QVBoxLayout, Ui_MainWindow 
 from llama_index.core.schema import TextNode
@@ -210,6 +211,32 @@ class LoginDialog(QDialog):
         
         self.main_layout.addWidget(self.container)
 
+    def try_silent_login(self):
+        """核心：尝试静默自动登录"""
+        acc = self.settings.value("last_account", "")
+        pwd_h = self.settings.value("last_pwd_h", "")
+        auto = self.settings.value("auto_login", "false")
+        if auto == "false" or auto is False: return None
+
+        if not acc or not pwd_h: return None
+
+        try:
+            conn = mysql.connector.connect(**DB_CONFIG)
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT * FROM users WHERE account=%s AND password_hash=%s", (acc, pwd_h))
+            user = cursor.fetchone()
+            conn.close()
+
+            if user:
+                return {
+                    "username": str(user.get("username", "Unknown")),
+                    "uid": str(user.get("id", "0")),
+                    "avatar_path": user.get("profile_photo_path")
+                }
+        except Exception as e:
+            self.logger.info(f"自动登录异常: {e}")
+        return None
+
     def toggle_mode(self):
         self.is_reg_mode = not self.is_reg_mode
         if self.is_reg_mode:
@@ -226,10 +253,8 @@ class LoginDialog(QDialog):
             self.setFixedSize(360, 420)
 
     def handle_action(self):
-        if self.is_reg_mode:
-            self.run_registration()
-        else:
-            self.handle_auth()
+        if self.is_reg_mode: self.run_registration()
+        else: self.handle_auth()
 
     def run_registration(self):
         acc, pwd, name = self.acc_i.text().strip(), self.pwd_i.text().strip(), self.name_i.text().strip()
@@ -262,19 +287,25 @@ class LoginDialog(QDialog):
             pwd_h = hashlib.sha256(pwd.encode()).hexdigest()
             cursor.execute("SELECT * FROM users WHERE account=%s AND password_hash=%s", (acc, pwd_h))
             user = cursor.fetchone()
+            
             if user:
                 self.settings.setValue("last_account", acc)
+                self.settings.setValue("last_pwd_h", pwd_h) 
+                self.settings.setValue("auto_login", True)
+                self.settings.sync()
+                
                 self.logged_user_data = {
                     "username": str(user.get("username", "Unknown")),
                     "uid": str(user.get("id", "0")),
                     "avatar_path": user.get("profile_photo_path")
                 }
-                self.accept()
+                conn.close()
+                self.accept() 
             else:
                 QMessageBox.warning(self, "失败", "账号或密码错误")
-            conn.close()
+                conn.close()
         except Exception as e:
-            logger.info(f"授权失败: {e}")
+            QMessageBox.critical(self, "错误", f"数据库连接异常: {e}")
 
     def load_last_account(self):
         last_acc = self.settings.value("last_account", "")
@@ -295,178 +326,485 @@ class LoginDialog(QDialog):
     def get_user_info(self):
         return self.logged_user_data
 
+def get_round_pixmap(path, size):
+    if not path or not os.path.exists(path):
+        return None
+    src = QPixmap(path).scaled(size, size, 
+                               Qt.AspectRatioMode.KeepAspectRatioByExpanding, 
+                               Qt.TransformationMode.SmoothTransformation)
+    
+    out = QPixmap(size, size)
+    out.fill(Qt.GlobalColor.transparent)
+    
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform) # 增加平滑度
+    
+    path_circle = QPainterPath()
+    path_circle.addEllipse(0, 0, size, size)
+    painter.setClipPath(path_circle)
+    
+    x_offset = (src.width() - size) // 2
+    y_offset = (src.height() - size) // 2
+    painter.drawPixmap(0, 0, src.copy(x_offset, y_offset, size, size))
+    
+    painter.end()
+    return out
+
 class ProfileHoverCard(QFrame):
-    def __init__(self, parent=None, login_cb=None, logout_cb=None):
+    def __init__(self, parent, login_cb, logout_cb):
         super().__init__(parent)
-        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(280, 200)
         self.login_cb, self.logout_cb = login_cb, logout_cb
         self.target_avatar = None
-        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(280, 320)
-        
         self.timer = QTimer(self); self.timer.timeout.connect(self._check_mouse)
         
         self.setStyleSheet("""
-            #main { background-color: #21252b; border: 1px solid #3e4451; border-radius: 12px; }
-            QLabel { color: #abb2bf; font-family: 'Microsoft YaHei'; }
-            QPushButton#login { background-color: #bd93f9; color: white; border-radius: 8px; font-weight: bold; height: 40px; border: none; }
-            QPushButton#logout { color: #ff5555; background: transparent; border: 1px solid #ff5555; border-radius: 6px; padding: 5px; }
+            QFrame { background: transparent; border: 1px solid rgba(255, 255, 255, 0.1);; }
+            QLabel { color: white; font-family: 'Microsoft YaHei'; border: none; background: transparent; }
+            QPushButton#login { 
+                background-color: #bd93f9; color: white; border-radius: 8px; 
+                font-weight: bold; height: 38px; border: none; 
+            }
+            QPushButton#logout { 
+                color: #ff5555; background: transparent; 
+                border: 1px solid #ff5555; border-radius: 6px; padding: 4px; 
+            }
         """)
-        
-        l = QVBoxLayout(self); l.setContentsMargins(0,0,0,0)
-        self.main = QFrame(); self.main.setObjectName("main"); l.addWidget(self.main)
-        self.stack = QStackedWidget(); QVBoxLayout(self.main).addWidget(self.stack)
-        
-        self.p0 = QWidget(); l0 = QVBoxLayout(self.p0); l0.setContentsMargins(25,40,25,40)
+
+        l = QVBoxLayout(self)
+        self.stack = QStackedWidget()
+        l.setContentsMargins(0, 0, 0, 0)
+        l.addWidget(self.stack)
+
+        self.p0 = QWidget(); l0 = QVBoxLayout(self.p0); l0.setContentsMargins(20, 60, 20, 20)
+        self.tip = QLabel("登录以体验更多功能")
         btn_in = QPushButton("立即登录"); btn_in.setObjectName("login"); btn_in.clicked.connect(self._on_in)
-        l0.addWidget(QLabel("登录后即可体验更多功能"), alignment=Qt.AlignCenter); l0.addStretch(); l0.addWidget(btn_in)
+        l0.addWidget(self.tip, alignment=Qt.AlignmentFlag.AlignCenter); l0.addStretch(); l0.addWidget(btn_in)
         self.stack.addWidget(self.p0)
+
+        self.p1 = QWidget(); l1 = QVBoxLayout(self.p1); l1.setContentsMargins(20, 60, 20, 20)
+        self.u_na = QLabel("璃依回")
+        self.u_na.setStyleSheet("font-size: 20px; font-weight: bold;")
+        self.u_id = QLabel("UID: 1")
+        self.u_id.setStyleSheet("font-size: 12px; color: #717e95;")
+        btn_out = QPushButton("注销登录"); btn_out.setObjectName("logout"); btn_out.clicked.connect(self._on_out)
         
-        self.p1 = QWidget(); l1 = QVBoxLayout(self.p1); l1.setContentsMargins(25,30,25,25)
-        self.u_av = QLabel(); self.u_av.setFixedSize(70, 70)
-        self.u_na = QLabel(); self.u_na.setStyleSheet("font-size: 16px; font-weight: bold; color: white;")
-        self.u_id = QLabel(); self.u_id.setStyleSheet("font-size: 11px; color: #717e95;")
-        btn_out = QPushButton("退出登录"); btn_out.setObjectName("logout"); btn_out.clicked.connect(self._on_out)
-        
-        l1.addWidget(self.u_av, alignment=Qt.AlignCenter); l1.addWidget(self.u_na, alignment=Qt.AlignCenter)
-        l1.addWidget(self.u_id, alignment=Qt.AlignCenter); l1.addStretch(); l1.addWidget(btn_out)
+        l1.addWidget(self.u_na, alignment=Qt.AlignmentFlag.AlignCenter)
+        l1.addWidget(self.u_id, alignment=Qt.AlignmentFlag.AlignCenter)
+        l1.addStretch()
+        l1.addWidget(btn_out)
         self.stack.addWidget(self.p1)
 
     def set_user_data(self, data):
         if data:
-            self.u_na.setText(data['username'])
-            self.u_id.setText(f"UID: {data['uid']}")
-            pix = get_round_pixmap(data.get('avatar_path'), 70)
-            if pix: self.u_av.setPixmap(pix)
-            else: 
-                self.u_av.setText(data['username'][0].upper())
-                self.u_av.setStyleSheet("background: #bd93f9; border-radius: 35px; color: white; font-size: 28px; font-weight: bold;")
+            self.u_na.setText(data.get('username', '璃依回'))
+            self.u_id.setText(f"UID: {data.get('uid', '1')}")
             self.stack.setCurrentIndex(1)
         else: self.stack.setCurrentIndex(0)
 
     def show_safe(self, pos, target):
-        self.target_avatar = target; self.move(pos); self.show(); self.timer.start(80)
+        self.target_avatar = target; self.move(pos); self.show(); self.raise_()
+        if self.target_avatar: self.target_avatar.raise_()
+        self.timer.start(80)
 
     def _check_mouse(self):
-        if not self.isVisible(): return
+        if not self.isVisible() or self.target_avatar is None: return
         p = QCursor.pos()
-        in_card = self.geometry().contains(p)
-        in_avatar = False
-        if self.target_avatar:
-            gp = self.target_avatar.mapToGlobal(QPoint(0,0))
-            rect = QRect(gp.x()-10, gp.y()-10, self.target_avatar.width()+20, self.target_avatar.height()+45)
-            in_avatar = rect.contains(p)
-        if not in_card and not in_avatar: self.hide(); self.timer.stop()
+        local_p = self.parent().mapFromGlobal(p)
+        
+        rect_avatar = self.target_avatar.geometry().adjusted(-20, -20, 20, 20)
+        if not self.geometry().contains(local_p) and not rect_avatar.contains(local_p):
+            self.hide()
+            self.timer.stop()
+            if hasattr(self.parent(), 'zoom_out_avatar'):
+                 self.parent().zoom_out_avatar()
 
-    def _on_in(self): self.hide(); self.login_cb()
+    def _on_in(self):
+        self.timer.stop() 
+        self.hide()
+        
+        if hasattr(self.parent(), 'zoom_out_avatar'):
+            self.parent().zoom_out_avatar()
+            
+        self.login_cb()
+
     def _on_out(self): self.logout_cb(); self.set_user_data(None)
 
 class HomePage(QWidget):
     def __init__(self):
         super().__init__()
+        self.user_data = None 
         self.user_name="游客"
-        self.user_data = None
-        self.hover_card = None
         self.init_ui()
 
+        self.card_widget = ProfileHoverCard(self, self._exec_login, self._exec_logout)
+        self.card_widget.hide()
+        
+        self.avatar_label = QLabel(self)
+        self.avatar_label.setFixedSize(45, 45)
+        self.avatar_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.avatar_label.setStyleSheet("""
+            background: #2d323b; 
+            border: 2px solid white; 
+            border-radius: 22px; 
+            color: white; 
+            font-weight: bold;
+        """)
+        self.avatar_label.setText("?")
+        
+        self.ani = QVariantAnimation(self)
+        self.ani.setDuration(150)
+        self.ani.setStartValue(45)
+        self.ani.setEndValue(75) 
+        self.ani.valueChanged.connect(self._animate_avatar)
+
+        self.avatar_label.installEventFilter(self)
+        self.avatar_label.raise_()
+
+        QTimer.singleShot(200, self.check_auto_login)
+
     def init_ui(self):
+        """主页左上角标题布局"""
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)
-    
+        self.main_layout.setContentsMargins(25, 25, 25, 0)
+        
         header = QWidget()
         header.setFixedHeight(100)
         h_layout = QHBoxLayout(header)
-        h_layout.setContentsMargins(40, 20, 40, 0)
-    
-        self.page_title = QLabel("SYSTEM LOGS")
-        self.page_title.setStyleSheet("color: white; font-size: 28px; font-weight: bold; background: transparent;")
+        h_layout.setContentsMargins(0, 0, 0, 0)
+
+        text_wrapper = QWidget()
+        v_text = QVBoxLayout(text_wrapper)
+        v_text.setContentsMargins(0, 0, 0, 0)
+        v_text.setSpacing(6)
+
+        self.page_title = QLabel("USER PROFILE")
+        self.page_title.setStyleSheet("font-size: 26px; font-weight: bold; color: white;")
         
-        self.top_avatar = QLabel("?")
-        self.top_avatar.setFixedSize(45, 45)
-        self.top_avatar.setAlignment(Qt.AlignCenter)
-        self.top_avatar.setStyleSheet("""
-            QLabel {
-                background: #2d323b; 
-                border: 2px solid white; 
-                border-radius: 22px; 
-                color: white;
-            }
-        """)
+        self.sub_tip = QLabel("用户主页，用于用户个性展示")
+        self.sub_tip.setStyleSheet("color: #717e95; font-size: 13px;")
         
-        self.top_avatar.installEventFilter(self)
+        self.purple_line = QFrame()
+        self.purple_line.setFixedHeight(3)
+        self.purple_line.setFixedWidth(45)
+        self.purple_line.setStyleSheet("background-color: #bd93f9; border-radius: 1px;")
+
+        v_text.addWidget(self.page_title)
+        v_text.addWidget(self.sub_tip)
+        v_text.addWidget(self.purple_line)
         
-        h_layout.addWidget(self.page_title)
-        h_layout.addStretch() 
-        h_layout.addWidget(self.top_avatar)
-    
+        h_layout.addWidget(text_wrapper, stretch=1)
+        h_layout.addSpacing(150) 
+
         self.main_layout.addWidget(header)
-        
-        self.sub_tip = QLabel("支持多窗口对齐查看与实时跟踪")
-        self.sub_tip.setStyleSheet("color: #5c6370; margin-left: 40px; background: transparent;")
-        self.main_layout.addWidget(self.sub_tip)
         self.main_layout.addStretch()
 
+    def _animate_avatar(self, value):
+        self.avatar_label.setFixedSize(value, value)
+        radius = value // 2
+        
+        if self.user_data and self.user_data.get("avatar_path"):
+            pix = get_round_pixmap(self.user_data["avatar_path"], value)
+            if pix:
+                self.avatar_label.setPixmap(pix)
+                self.avatar_label.setText("")
+        
+        self.avatar_label.setStyleSheet(f"background: #2d323b; border: 2px solid white; border-radius: {radius}px; color: white;")
+        self.update_positions()
+
+    def update_positions(self):
+        right_margin = 120
+        top_margin = 40
+
+        ax = self.width() - self.avatar_label.width() - right_margin
+        ay = top_margin
+        self.avatar_label.move(ax, ay)
+
+        card_x = ax - (self.card_widget.width() // 2) + (self.avatar_label.width() // 2)
+        card_y = ay + (self.avatar_label.height() // 2) 
+        self.card_widget.move(card_x, card_y)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_positions()
+
     def eventFilter(self, watched, event):
-        if watched == self.top_avatar:
-            if event.type() == QEvent.Enter:
-                self._handle_avatar_hover()
-                return True 
+        if watched == self.avatar_label:
+            if event.type() == QEvent.Type.Enter:
+                self.ani.setDirection(QVariantAnimation.Direction.Forward)
+                self.ani.start()
+                self.card_widget.show_safe(self.card_widget.pos(), self.avatar_label)
+                self.avatar_label.raise_()
         return super().eventFilter(watched, event)
 
-    def _handle_avatar_hover(self):
-        if not self.hover_card:
-            self.hover_card = ProfileHoverCard(self.window(), self._exec_login, self._exec_logout)
-
-        self.hover_card.set_user_data(self.user_data)
-        
-        gp = self.top_avatar.mapToGlobal(QPoint(0, 0))
-        
-        target_x = gp.x() - self.hover_card.width() + self.top_avatar.width()
-        target_y = gp.y() + self.top_avatar.height() + 5
-        
-        self.hover_card.show_safe(QPoint(target_x, target_y), self.top_avatar)
+    def zoom_out_avatar(self):
+        self.ani.setDirection(QVariantAnimation.Direction.Backward)
+        self.ani.start()
 
     def _exec_login(self):
+        if self.card_widget:
+            self.card_widget.hide()
+        self.zoom_out_avatar()
+
         d = LoginDialog(self)
-        if d.exec():
-            self.user_data = d.get_user_info()
-            if self.user_data:self.user_name=self.user_data.get("username","游客")
-            self.page_title.setText("USER PROFILE")
-            self.sub_tip.setText("管理您的个人账户信息与偏好设置")
-            
-            path = self.user_data.get("avatar_path")
-            pix = get_round_pixmap(path, 45) 
-            if pix:
-                self.top_avatar.setPixmap(pix)
-                self.top_avatar.setText("")
-            
-            if self.hover_card:
-                self.hover_card.set_user_data(self.user_data)
+        if d.exec() == QDialog.DialogCode.Accepted:
+            data = d.get_user_info()
+            if data:
+                self.user_name = data.get("username", "游客")
+                
+                settings = QSettings("MikaApp", "LoginSettings")
+                settings.setValue("auto_login", True)
+                settings.setValue("user_data", data)
+                
+                self.apply_user_state(data)
 
     def _exec_logout(self):
         self.user_data = None
-        self.page_title.setText("SYSTEM LOGS")
-        self.sub_tip.setText("支持多窗口对齐查看与实时跟踪")
-        self.top_avatar.setPixmap(QPixmap()) 
-        self.top_avatar.setText("?") 
+        settings = QSettings("MikaApp", "LoginSettings")
+        settings.remove("auto_login")
+        settings.remove("user_data")
+        
+        self.apply_user_state(None)
+
+    def apply_user_state(self, data):
+        self.user_data = data
+        self.user_name = data.get("username", "游客")
+        if data:
+            pix = get_round_pixmap(data.get("avatar_path"), 45)
+            if pix:
+                self.avatar_label.setPixmap(pix)
+                self.avatar_label.setText("")
+            else:
+                self.avatar_label.setText(data.get("username", "U")[0])
+            self.card_widget.set_user_data(data)
+        else:
+            self.avatar_label.setPixmap(QPixmap())
+            self.avatar_label.setText("?")
+            self.card_widget.set_user_data(None)
+
+    def check_auto_login(self):
+        settings = QSettings("MikaApp", "LoginSettings")
+        is_auto = str(settings.value("auto_login", "false")).lower() == "true"
+        
+        if is_auto:
+            saved_data = settings.value("user_data")
+            if saved_data:
+                self.user_name = saved_data.get("username", "游客")
+                self.apply_user_state(saved_data)
+
+class MultimodalEdit(QTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAcceptDrops(True)
+        
+        self.image_data_list = []  
+        self.preview_layout = None  
+        self.preview_container = None 
+
+        self.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                border: 1px solid #3e4451;
+                border-radius: 8px;
+                /* padding 解决光标紧贴边缘和输入法遮挡问题 */
+                padding: 10px;
+                /* 现代字体集 */
+                font-family: 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+                font-size: 14px;
+            }
+            QScrollBar:vertical {
+                width: 8px;
+                background: transparent;
+            }
+            QScrollBar::handle:vertical {
+                background: #3e4451;
+                border-radius: 4px;
+            }
+        """)
+        self.setPlaceholderText("在此输入文字...")
+
+    def insertFromMimeData(self, source: QMimeData):
+        """处理剪贴板数据：优先拦截图片，如果是文字则正常处理"""
+        if source.hasImage():
+            image = QImage(source.imageData())
+            if not image.isNull():
+                self._process_qimage(image, "Clipboard_Image")
+                return 
+
+        super().insertFromMimeData(source)
+
+    def insert_image(self, file_path):
+        """处理本地文件图片"""
+        image = QImage(file_path)
+        if image.isNull():
+            return
+        self._process_qimage(image, file_path)
+
+    def _process_qimage(self, image, label_path):
+        """统一处理图片转 Base64 逻辑"""
+        buffer = QBuffer()
+        buffer.open(QIODevice.WriteOnly)
+        image.save(buffer, "JPG", 85)  
+        img_base64 = base64.b64encode(buffer.data().data()).decode()
+        buffer.close()
+        
+        self.image_data_list.append(img_base64)
+
+        self.add_preview_card(image, img_base64)
+        
+        if self.preview_container:
+            self.preview_container.show()
+
+    def add_preview_card(self, qimage_obj, data_ptr):
+        """创建一个带删除按钮的缩略图卡片"""
+        card = QFrame()
+        card.setFixedSize(70, 70)
+        card.setStyleSheet("""
+            QFrame { 
+                background: #2c313c; border-radius: 6px; 
+                border: 1px solid #3e4451; 
+            }
+        """)
+        
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(2, 2, 2, 2)
+
+        lbl = QLabel()
+        pix = QPixmap.fromImage(qimage_obj).scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        lbl.setPixmap(pix)
+        lbl.setAlignment(Qt.AlignCenter)
+        card_layout.addWidget(lbl)
+        
+        del_btn = QPushButton("×", card)
+        del_btn.setFixedSize(16, 16)
+        del_btn.move(52, 2)
+        del_btn.setCursor(Qt.PointingHandCursor)
+        del_btn.setStyleSheet("""
+            QPushButton { 
+                background: rgba(255, 85, 85, 0.8); color: white; 
+                border-radius: 8px; font-size: 10px; font-weight: bold; border: none;
+            }
+            QPushButton:hover { background: #ff5555; }
+        """)
+        
+        def remove_card():
+            if data_ptr in self.image_data_list:
+                self.image_data_list.remove(data_ptr)
+            card.deleteLater()
+            QTimer.singleShot(10, self._check_preview_empty)
+
+        del_btn.clicked.connect(remove_card)
+        
+        if self.preview_layout:
+            self.preview_layout.insertWidget(self.preview_layout.count() - 1, card)
+
+    def _check_preview_empty(self):
+        if not self.image_data_list and self.preview_container:
+            self.preview_container.hide()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        """修复：拖入图片后不再输入文件路径"""
+        if event.mimeData().hasUrls():
+            found_image = False
+            for url in event.mimeData().urls():
+                path = url.toLocalFile()
+                if path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
+                    self.insert_image(path)
+                    found_image = True
+            
+            if found_image:
+                event.setDropAction(Qt.CopyAction)
+                event.accept()
+                return 
+
+        super().dropEvent(event)
+
+    def clear_all(self):
+        self.clear()
+        self.image_data_list = []
+        if self.preview_container:
+            self.preview_container.hide()
+            
+        if self.preview_layout:
+            while self.preview_layout.count() > 1:
+                item = self.preview_layout.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.setParent(None)
+                    w.deleteLater()
+
+class HoverButton(QPushButton):
+    hovered = Signal(bool)
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self.hovered.emit(True)
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.hovered.emit(False)
 
 class ChatPage(QWidget):
     def __init__(self):
         super().__init__()
-        self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(0)
+        self.is_voice_mode = False
+        self.interpt = asyncio.Event()
+        self.forbid_change = asyncio.Event()
+        self.wait_for_get = asyncio.Event()
+        self.asr_prepare=asyncio.Event()
+        self.text = ""
+        self.VL_models = ["Qwen2-VL-72B"]
+        
+        self.main_stack = QStackedLayout(self)
+        self.setStyleSheet("background-color: #1a1d22;")
 
-        self.splitter = QSplitter(Qt.Vertical)
-        self.splitter.setHandleWidth(1)
-        self.splitter.setStyleSheet("QSplitter::handle { background: #2c313c; }")
+        self.chat_input = MultimodalEdit() 
+        self.chat_input.installEventFilter(self)
+
+        self.preview_scroll = QScrollArea()
+        self.preview_scroll.setFixedHeight(90)
+        self.preview_scroll.setWidgetResizable(True)
+        self.preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.preview_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.preview_scroll.setStyleSheet("background: #16191d; border: none; border-bottom: 1px solid #2c313c;")
+        self.preview_scroll.hide() 
+
+        self.preview_content = QFrame()
+        self.preview_layout = QHBoxLayout(self.preview_content)
+        self.preview_layout.setContentsMargins(10, 10, 10, 10)
+        self.preview_layout.setSpacing(10)
+        self.preview_layout.addStretch() 
+        self.preview_scroll.setWidget(self.preview_content)
+        
+        self.chat_input.preview_layout = self.preview_layout
+        self.chat_input.preview_container = self.preview_scroll
+
+        self.toggle_ex_btn = HoverButton("＋")
+        self.toggle_ex_btn.setFixedSize(36, 36)
+        self.update_ex_btn_style() 
+        self.toggle_ex_btn.hovered.connect(self.on_btn_hovered)
+        self.toggle_ex_btn.clicked.connect(self.on_ex_btn_clicked)
+
+        self.setup_page1() 
+        self.setup_page2() 
+        self.init_floating_panel() 
+
+    def setup_page1(self):
+        self.page1 = QWidget()
+        layout = QVBoxLayout(self.page1); layout.setContentsMargins(0,0,0,0); layout.setSpacing(0)
+        self.v_splitter = QSplitter(Qt.Vertical)
+        self.v_splitter.setHandleWidth(1)
+        self.v_splitter.setStyleSheet("QSplitter::handle { background: #2c313c; }")
 
         self.unity_area = QFrame()
         self.unity_area.setStyleSheet("background-color: #050505; border: none;")
         u_layout = QVBoxLayout(self.unity_area)
-        u_layout.setContentsMargins(0, 0, 0, 0)
         self.u_label = QLabel("Unity Rendering Area")
         self.u_label.setAlignment(Qt.AlignCenter)
         self.u_label.setStyleSheet("color: #333; font-weight: bold;")
@@ -474,94 +812,147 @@ class ChatPage(QWidget):
 
         self.input_container = QFrame()
         self.input_container.setStyleSheet("background-color: #1d2127; border-top: 1px solid #2c313c;")
+        self.v_input_layout = QVBoxLayout(self.input_container); self.v_input_layout.setContentsMargins(0,0,0,0)
         
-        self.h_layout = QHBoxLayout(self.input_container)
-        self.h_layout.setContentsMargins(10, 5, 10, 5)
-        self.h_layout.setSpacing(10)
+        self.v_input_layout.addWidget(self.preview_scroll)
 
-        self.chat_input = QTextEdit()
-        self.chat_input.setPlaceholderText("在此输入... (Enter 发送)")
-        self.chat_input.setMinimumHeight(0)
-        self.chat_input.setStyleSheet("""
-            QTextEdit { 
-                background: #16191d; 
-                border: 1px solid #2c313c; 
-                color: white; 
-                font-family: 'Segoe UI', 'Microsoft YaHei';
-                font-size: 14px;
-                padding: 5px;
-                border-radius: 4px;
-            }
-        """)
-        self.chat_input.installEventFilter(self)
+        self.input_row = QFrame()
+        self.h_layout = QHBoxLayout(self.input_row)
+        self.h_layout.setContentsMargins(10, 8, 10, 8); self.h_layout.setSpacing(10)
+
         self.h_layout.addWidget(self.chat_input)
+        self.h_layout.addWidget(self.toggle_ex_btn)
+        
+        self.v_input_layout.addWidget(self.input_row)
+        self.v_splitter.addWidget(self.unity_area); self.v_splitter.addWidget(self.input_container)
+        layout.addWidget(self.v_splitter)
+        self.main_stack.addWidget(self.page1)
 
-        self.mode_btn = QPushButton("🎤")
-        self.mode_btn.setFixedSize(34, 34)
-        self.mode_btn.setCursor(Qt.PointingHandCursor)
-        self.mode_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3e4451;
-                color: white;
-                border-radius: 17px;
-                border: 1px solid #565f73;
-                font-size: 16px;
-            }
-            QPushButton:hover { background-color: #bd93f9; }
-        """)
+    def setup_page2(self):
+        self.page2 = QWidget()
+        lay = QHBoxLayout(self.page2); lay.setContentsMargins(0,0,0,0)
+        self.h_splitter = QSplitter(Qt.Horizontal)
+        self.h_splitter.setStyleSheet("QSplitter::handle { background: #2c313c; }")
+        
+        left = QFrame(); left.setStyleSheet("background: #050505;")
+        right = QFrame(); right.setStyleSheet("background: #1d2127; border-left: 1px solid #2c313c;")
+        rv = QVBoxLayout(right); rv.setContentsMargins(0,0,0,0)
+        
+        self.history_area = QScrollArea(); self.history_area.setStyleSheet("background: transparent; border: none;")
+        
+        self.p2_input_box = QFrame(); self.p2_input_box.setFixedHeight(85)
+        self.p2_v_lay = QVBoxLayout(self.p2_input_box); self.p2_v_lay.setContentsMargins(0,0,0,0)
+        
+        self.p2_h_row = QHBoxLayout() 
+        self.p2_h_row.setContentsMargins(10, 5, 10, 10)
+        self.p2_v_lay.addLayout(self.p2_h_row) 
+        
+        rv.addWidget(self.history_area); rv.addWidget(self.p2_input_box)
+        self.h_splitter.addWidget(left); self.h_splitter.addWidget(right)
+        lay.addWidget(self.h_splitter)
+        self.main_stack.addWidget(self.page2)
+
+    def init_floating_panel(self):
+        self.floating_panel = QFrame(self)
+        self.floating_panel.setFixedSize(135, 50)
+        self.floating_panel.setStyleSheet("background: #2c313c; border: 1px solid #4e5565; border-radius: 10px;")
+        fl = QHBoxLayout(self.floating_panel); fl.setContentsMargins(5,5,5,5)
+
+        self.mode_btn = QPushButton("🎤", self.floating_panel) 
         self.mode_btn.clicked.connect(self.toggle_mode)
-        self.h_layout.addWidget(self.mode_btn, 0, Qt.AlignVCenter)
 
-        self.splitter.addWidget(self.unity_area)
-        self.splitter.addWidget(self.input_container)
-        self.splitter.setCollapsible(0, True)
-        self.splitter.setCollapsible(1, True)
-
-        self.main_layout.addWidget(self.splitter)
+        btn_file = QPushButton("📁", self.floating_panel)
+        btn_file.clicked.connect(self.upload_image_dialog)
         
-        self.is_voice_mode = False
-        self.forbid_change = asyncio.Event()
-        self.audioplay_done=None
-        self.interpt = asyncio.Event()
-        self.wait_for_get = asyncio.Event()
-        self.text = ""
+        btn_sw = QPushButton("⇌", self.floating_panel)
+        btn_sw.clicked.connect(self.toggle_layout)
 
-        self.style_timer = QTimer(self)
-        self.style_timer.timeout.connect(self._update_ui_state)
-        self.style_timer.start(100)
-        self.asr_prepare=asyncio.Event()
+        for b in [btn_file, self.mode_btn, btn_sw]:
+            b.setFixedSize(32, 32)
+            b.setStyleSheet("background: #3e4451; color: white; border-radius: 6px; border: none;")
+            fl.addWidget(b)
         
-    @asyncSlot()
-    async def _update_ui_state(self):
+        self.floating_panel.hide()
+        self.hide_timer = QTimer()
+        self.hide_timer.setSingleShot(True)
+        self.hide_timer.timeout.connect(self.floating_panel.hide)
+        self.floating_panel.enterEvent = lambda e: self.hide_timer.stop()
+        self.floating_panel.leaveEvent = lambda e: self.hide_timer.start(300)
+
+    def update_ui_state(self):
         if self.is_voice_mode and not self.asr_prepare.is_set():return
+
+        icon = "⌨️" if self.is_voice_mode else "🎤"
+        self.mode_btn.setText(icon)
+        self.mode_btn.setStyleSheet("background: #3e4451; color: white; border-radius: 6px; border: none;")
+
+    def update_ex_btn_style(self):
         if self.forbid_change.is_set():
-            self.mode_btn.setText("⏹️")
-            if "background-color: #ff5555" not in self.mode_btn.styleSheet():
-                self.mode_btn.setStyleSheet(self.mode_btn.styleSheet().replace("#3e4451", "#ff5555"))
+            self.toggle_ex_btn.setText("⏹️")
+            self.toggle_ex_btn.setStyleSheet("background: #ff5555; color: white; border-radius: 18px; border: 1px solid #ff8888; font-size: 14px;")
+        elif not self.forbid_change.is_set():
+            self.toggle_ex_btn.setText("＋")
+            self.toggle_ex_btn.setStyleSheet("QPushButton { background: #3e4451; color: white; border-radius: 18px; border: 1px solid #565f73; font-size: 20px; } QPushButton:hover { background: #4e5565; border-color: #87CEFA; }")
+
+    def on_ex_btn_clicked(self):
+        if self.forbid_change.is_set():
+            self.interpt.set()
+            self.notify("操作已中止", "warn")
+            return
+
+    def toggle_layout(self):
+        curr = self.main_stack.currentIndex()
+        new_idx = 1 if curr == 0 else 0
+        
+        if new_idx == 1:
+            self.p2_v_lay.insertWidget(0, self.preview_scroll)
+            self.p2_h_row.addWidget(self.chat_input)
+            self.p2_h_row.addWidget(self.toggle_ex_btn)
         else:
-            icon = "⌨️" if self.is_voice_mode else "🎤"
-            self.mode_btn.setText(icon)
-            if "background-color: #3e4451" not in self.mode_btn.styleSheet():
-                self.mode_btn.setStyleSheet(self.mode_btn.styleSheet().replace("#ff5555", "#3e4451"))
+            self.v_input_layout.insertWidget(0, self.preview_scroll)
+            self.h_layout.addWidget(self.chat_input)
+            self.h_layout.addWidget(self.toggle_ex_btn)
+        
+        self.main_stack.setCurrentIndex(new_idx)
+        self.floating_panel.hide()
+        
+        if new_idx == 1: 
+            QTimer.singleShot(10, lambda: self.h_splitter.setSizes([self.width()*0.75, self.width()*0.25]))
+
+    def send_message(self):
+        if self.is_voice_mode or self.forbid_change.is_set() or self.wait_for_get.is_set(): return
+        content = self.chat_input.toPlainText().strip()
+        images = getattr(self.chat_input, 'image_data_list', [])
+        
+        model_name = "DeepSeek-V3"
+        self.config_path = "config/config.json"
+        if os.path.exists(self.config_path):
+            try:
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    config=json.load(f); model_name=config.get("model_name","DeepSeek-V3")
+            except: pass
+
+        if content or images:
+            if images and model_name not in self.VL_models: # VL 模型判定
+                self.notify("当前模型不支持图片输入", "warn"); return
+            img_info = f" 图片({len(images)}张)" if images else ""
+            self.text = content; self.current_images = images.copy() 
+            self.chat_input.clear_all(); self.chat_input.setFocus(); self.wait_for_get.set() 
 
     @asyncSlot()
     async def toggle_mode(self):
         if self.forbid_change.is_set():
             self.interpt.set()
-            if self.audioplay_done:self.audioplay_done.set()
-            self.is_voice_mode=True
-
+        
         self.is_voice_mode = not self.is_voice_mode
-        await self.asr_prepare.wait()
+        if hasattr(self, 'asr_prepare'): await self.asr_prepare.wait()
+        await self._update_ui_state()
+        
         if self.is_voice_mode:
-            self.mode_btn.setText("⌨️")
-            self.chat_input.setReadOnly(True)
-            self.chat_input.setPlainText("语音识别模式: 准备就绪，请说话...")
+            self.chat_input.setReadOnly(True); self.chat_input.setPlainText("语音识别模式: 准备就绪，请说话...")
             self.chat_input.setStyleSheet(self.chat_input.styleSheet().replace("color: white;", "color: #87CEFA;"))
         else:
-            self.mode_btn.setText("🎤")
-            self.chat_input.setReadOnly(False)
-            self.chat_input.clear()
+            self.chat_input.setReadOnly(False); self.chat_input.clear()
             self.chat_input.setStyleSheet(self.chat_input.styleSheet().replace("color: #87CEFA;", "color: white;"))
 
     def eventFilter(self, obj, event):
@@ -574,23 +965,33 @@ class ChatPage(QWidget):
                 return True
         return super().eventFilter(obj, event)
 
-    def send_message(self):
-        if self.is_voice_mode or self.forbid_change.is_set(): 
+    def on_btn_hovered(self, is_hover):
+        if self.forbid_change.is_set():
+            self.floating_panel.hide()
             return
-        content = self.chat_input.toPlainText().strip()
-        if content:
-            self.text = content
-            self.chat_input.clear()
-            self.wait_for_get.set()
+
+        if is_hover:
+            self.update_ex_btn_style()
+            
+            btn_pos = self.toggle_ex_btn.mapTo(self, QPoint(0, 0))
+            self.floating_panel.move(btn_pos.x() - 100, btn_pos.y() - 55)
+            self.floating_panel.show()
+            self.floating_panel.raise_()
+        else:
+            self.hide_timer.start(300)
+
+    def upload_image_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择图片", "", "Images (*.png *.jpg *.jpeg *.bmp *.gif)")
+        if path: self.chat_input.insert_image(path)
 
     def showEvent(self, event):
         super().showEvent(event)
-        QTimer.singleShot(50, self._set_initial_size)
+        QTimer.singleShot(50, lambda: self.v_splitter.setSizes([self.height()-100, 100]))
 
-    def _set_initial_size(self):
-        total_h = self.height()
-        default_input_h = 50 
-        self.splitter.setSizes([total_h - default_input_h, default_input_h])
+    def notify(self, message, level="info"):
+        colors = {"info": "#87CEFA", "warn": "#ffb86c", "error": "#ff5555"}
+        if hasattr(self, 'ToastNotification'): 
+            ToastNotification(self, message, colors.get(level, "#87CEFA"))
 
 class LogPage(BasePage):
     def __init__(self):
@@ -1097,7 +1498,7 @@ class SettingPage(BasePage):
         v_layout = QHBoxLayout()
         v_layout.addWidget(self.v_slider)
         v_layout.addWidget(self.v_label)
-        self.create_row("输出音量", "调整 Lethe 说话的声音大小", v_layout)
+        self.create_row("输出音量", "调整 agent 说话的声音大小", v_layout)
         self.v_slider.valueChanged.connect(lambda v: self.v_label.setText(f"{v}%"))
 
         self.container_layout.addSpacing(15)
@@ -2031,13 +2432,13 @@ class MyWindow(QMainWindow, Ui_MainWindow):
         loop.stop()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             if self.contentTopBg.underMouse():
                 self.dragPos = event.globalPosition().toPoint()
                 event.accept()
 
     def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.LeftButton and self.contentTopBg.underMouse():
+        if event.buttons() & Qt.MouseButton.LeftButton and self.contentTopBg.underMouse():
             self.move(self.pos() + event.globalPosition().toPoint() - self.dragPos)
             self.dragPos = event.globalPosition().toPoint()
             event.accept()
@@ -2045,37 +2446,8 @@ class MyWindow(QMainWindow, Ui_MainWindow):
     def toggle_maximize(self):
         if self.isMaximized():
             self.showNormal()
-            icon_path = u":/icons/images/icons/icon_maximize.png"
         else: 
             self.showMaximized()
-            icon_path = u":/icons/images/icons/icon_restore.png"
-        icon = QIcon()
-        icon.addFile(icon_path, QSize(), QIcon.Mode.Normal, QIcon.State.Off)
-        self.maximizeRestoreAppBtn.setIcon(icon)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            if self.contentTopBg.underMouse():
-                self.dragPos = event.globalPosition().toPoint()
-                event.accept()
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.LeftButton and self.contentTopBg.underMouse():
-            self.move(self.pos() + event.globalPosition().toPoint() - self.dragPos)
-            self.dragPos = event.globalPosition().toPoint()
-            event.accept()
-
-    def toggle_maximize(self):
-        if self.isMaximized():
-            self.showNormal()
-            icon_path = u":/icons/images/icons/icon_maximize.png"
-        else: 
-            self.showMaximized()
-            icon_path = u":/icons/images/icons/icon_restore.png"
-        
-        icon = QIcon()
-        icon.addFile(icon_path, QSize(), QIcon.Mode.Normal, QIcon.State.Off)
-        self.maximizeRestoreAppBtn.setIcon(icon)
     
     @asyncSlot()
     async def apply_blue_shimmer(self, button, index):
