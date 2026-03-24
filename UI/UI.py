@@ -9,14 +9,16 @@ import copy
 import psutil
 import aiofiles
 import json
+import socket
 import shutil
 import hashlib
 import mysql.connector
-from mysql.connector import Error
 from mika.tool import  getLogger
+from mysql.connector import Error
 from mika.api import SiliconCloud_model
+from PySide6.QtCore import QProcess, QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtCore import QAbstractAnimation, QBuffer, QEvent, QEasingCurve, QIODevice, QMimeData, QParallelAnimationGroup, QPointF, QSettings, QTimer, Qt, QPropertyAnimation, QPoint, QRect, QSize, QVariantAnimation, Signal
+from PySide6.QtCore import QAbstractAnimation, QBuffer, QEvent, QEasingCurve, QIODevice, QMimeData, QParallelAnimationGroup, QPointF, QSettings, QTimer, QUrl, Qt, QPropertyAnimation, QPoint, QRect, QSize, QVariantAnimation, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QIcon, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShowEvent, QTextCursor,QPixmap
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QGraphicsProxyWidget, QGraphicsScene, QGraphicsView, QGridLayout, QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QScrollArea, QSizeGrip, QPushButton, QSizePolicy, QSlider, QSplitter, QStackedLayout, QStackedWidget, QTextEdit, QTreeWidget, QTreeWidgetItem, QWidget
 from qasync import QEventLoop, asyncSlot
@@ -98,6 +100,7 @@ class BasePage(QWidget):
         self.container_layout.setContentsMargins(0, 15, 0, 0)
         self.layout.addWidget(self.container, 1)
 
+# ================================HomePage=============================================
 
 DB_CONFIG = {
     'host': 'localhost',
@@ -354,7 +357,7 @@ def get_round_pixmap(path, size):
 class ProfileHoverCard(QFrame):
     def __init__(self, parent, login_cb, logout_cb):
         super().__init__(parent)
-        self.setFixedSize(280, 200)
+        self.setFixedSize(280, 400)
         self.login_cb, self.logout_cb = login_cb, logout_cb
         self.target_avatar = None
         self.timer = QTimer(self); self.timer.timeout.connect(self._check_mouse)
@@ -594,6 +597,8 @@ class HomePage(QWidget):
                 self.user_name = saved_data.get("username", "游客")
                 self.apply_user_state(saved_data)
 
+# ================================ChatPage=============================================
+
 class MultimodalEdit(QTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -750,6 +755,8 @@ class HoverButton(QPushButton):
         super().leaveEvent(event)
         self.hovered.emit(False)
 
+from live2d.live2d_UI import CustomPage
+
 class ChatPage(QWidget):
     def __init__(self):
         super().__init__()
@@ -791,64 +798,89 @@ class ChatPage(QWidget):
         self.toggle_ex_btn.hovered.connect(self.on_btn_hovered)
         self.toggle_ex_btn.clicked.connect(self.on_ex_btn_clicked)
 
+        self.live2d_view = QWebEngineView()
+        self.live2d_view.page().setBackgroundColor(QColor("#050505"))
+        self.live2d_page = CustomPage(self.live2d_view)
+        self.live2d_view.setPage(self.live2d_page)
+        self.live2d_view.setUrl(QUrl("http://localhost:5173")) 
+        self.live2d_view.setStyleSheet("background: transparent;")
+
         self.setup_page1() 
         self.setup_page2() 
-        self.init_floating_panel() 
+        self.init_floating_panel()
 
     def setup_page1(self):
         self.page1 = QWidget()
-        layout = QVBoxLayout(self.page1); layout.setContentsMargins(0,0,0,0); layout.setSpacing(0)
+        layout = QVBoxLayout(self.page1)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
         self.v_splitter = QSplitter(Qt.Vertical)
         self.v_splitter.setHandleWidth(1)
         self.v_splitter.setStyleSheet("QSplitter::handle { background: #2c313c; }")
 
         self.unity_area = QFrame()
         self.unity_area.setStyleSheet("background-color: #050505; border: none;")
-        u_layout = QVBoxLayout(self.unity_area)
-        self.u_label = QLabel("Unity Rendering Area")
-        self.u_label.setAlignment(Qt.AlignCenter)
-        self.u_label.setStyleSheet("color: #333; font-weight: bold;")
-        u_layout.addWidget(self.u_label)
+
+        self.u_layout = QVBoxLayout(self.unity_area)
+        self.u_layout.setContentsMargins(0, 0, 0, 0) 
+
+        self.u_layout.addWidget(self.live2d_view) 
 
         self.input_container = QFrame()
         self.input_container.setStyleSheet("background-color: #1d2127; border-top: 1px solid #2c313c;")
-        self.v_input_layout = QVBoxLayout(self.input_container); self.v_input_layout.setContentsMargins(0,0,0,0)
-        
+        self.v_input_layout = QVBoxLayout(self.input_container)
+        self.v_input_layout.setContentsMargins(0, 0, 0, 0)
         self.v_input_layout.addWidget(self.preview_scroll)
 
         self.input_row = QFrame()
         self.h_layout = QHBoxLayout(self.input_row)
-        self.h_layout.setContentsMargins(10, 8, 10, 8); self.h_layout.setSpacing(10)
-
+        self.h_layout.setContentsMargins(10, 8, 10, 8)
         self.h_layout.addWidget(self.chat_input)
         self.h_layout.addWidget(self.toggle_ex_btn)
-        
+
         self.v_input_layout.addWidget(self.input_row)
-        self.v_splitter.addWidget(self.unity_area); self.v_splitter.addWidget(self.input_container)
+        self.v_splitter.addWidget(self.unity_area)
+        self.v_splitter.addWidget(self.input_container)
         layout.addWidget(self.v_splitter)
         self.main_stack.addWidget(self.page1)
 
     def setup_page2(self):
         self.page2 = QWidget()
-        lay = QHBoxLayout(self.page2); lay.setContentsMargins(0,0,0,0)
+        lay = QHBoxLayout(self.page2)
+        lay.setContentsMargins(0, 0, 0, 0)
+
         self.h_splitter = QSplitter(Qt.Horizontal)
         self.h_splitter.setStyleSheet("QSplitter::handle { background: #2c313c; }")
-        
-        left = QFrame(); left.setStyleSheet("background: #050505;")
-        right = QFrame(); right.setStyleSheet("background: #1d2127; border-left: 1px solid #2c313c;")
-        rv = QVBoxLayout(right); rv.setContentsMargins(0,0,0,0)
-        
-        self.history_area = QScrollArea(); self.history_area.setStyleSheet("background: transparent; border: none;")
-        
-        self.p2_input_box = QFrame(); self.p2_input_box.setFixedHeight(85)
-        self.p2_v_lay = QVBoxLayout(self.p2_input_box); self.p2_v_lay.setContentsMargins(0,0,0,0)
-        
+
+        self.p2_left_area = QFrame() 
+        self.p2_left_area.setStyleSheet("background: #050505; border: none;")
+        self.p2_u_layout = QVBoxLayout(self.p2_left_area)
+        self.p2_u_layout.setContentsMargins(0, 0, 0, 0)
+
+        right_panel = QFrame()
+        right_panel.setStyleSheet("background: #1d2127; border-left: 1px solid #2c313c;")
+        rv = QVBoxLayout(right_panel)
+        rv.setContentsMargins(0, 0, 0, 0)
+
+        self.history_area = QScrollArea()
+        self.history_area.setStyleSheet("background: transparent; border: none;")
+
+        self.p2_input_box = QFrame()
+        self.p2_input_box.setFixedHeight(85)
+        self.p2_v_lay = QVBoxLayout(self.p2_input_box)
+        self.p2_v_lay.setContentsMargins(0, 0, 0, 0)
+
         self.p2_h_row = QHBoxLayout() 
         self.p2_h_row.setContentsMargins(10, 5, 10, 10)
+        self.p2_h_row.setSpacing(10)
         self.p2_v_lay.addLayout(self.p2_h_row) 
-        
-        rv.addWidget(self.history_area); rv.addWidget(self.p2_input_box)
-        self.h_splitter.addWidget(left); self.h_splitter.addWidget(right)
+
+        rv.addWidget(self.history_area)
+        rv.addWidget(self.p2_input_box)
+
+        self.h_splitter.addWidget(self.p2_left_area)
+        self.h_splitter.addWidget(right_panel)
         lay.addWidget(self.h_splitter)
         self.main_stack.addWidget(self.page2)
 
@@ -903,21 +935,47 @@ class ChatPage(QWidget):
     def toggle_layout(self):
         curr = self.main_stack.currentIndex()
         new_idx = 1 if curr == 0 else 0
-        
+
+        offset_y = 120
+
         if new_idx == 1:
-            self.p2_v_lay.insertWidget(0, self.preview_scroll)
-            self.p2_h_row.addWidget(self.chat_input)
+            self.p2_u_layout.addWidget(self.live2d_view)
+            self.p2_v_lay.insertWidget(0, self.preview_scroll) 
+            self.p2_h_row.addWidget(self.chat_input)          
             self.p2_h_row.addWidget(self.toggle_ex_btn)
+
+            self.live2d_view.page().runJavaScript(f"window.resizeModel({offset_y});")
+
         else:
+            self.u_layout.addWidget(self.live2d_view)
             self.v_input_layout.insertWidget(0, self.preview_scroll)
-            self.h_layout.addWidget(self.chat_input)
+            self.h_layout.addWidget(self.chat_input)                
             self.h_layout.addWidget(self.toggle_ex_btn)
-        
+
+            self.live2d_view.page().runJavaScript(f"window.resizeModel({0});")
+
         self.main_stack.setCurrentIndex(new_idx)
         self.floating_panel.hide()
-        
+
         if new_idx == 1: 
-            QTimer.singleShot(10, lambda: self.h_splitter.setSizes([self.width()*0.75, self.width()*0.25]))
+            QTimer.singleShot(20, lambda: self.h_splitter.setSizes([int(self.width()*0.75), int(self.width()*0.25)]))
+        else:
+            QTimer.singleShot(20, lambda: self.v_splitter.setSizes([self.height()-120, 120]))
+
+    def is_port_open(self,port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(('localhost', port)) == 0
+
+    def start_live2d_render(self):
+        if not self.is_port_open(5173):
+            logger.info("🌐 检测到服务器未启动，正在自动运行 npm run dev...")
+            self.web_server_process = QProcess(self)
+            self.web_server_process.setWorkingDirectory("live2d")
+            self.web_server_process.start("cmd", ["/c", "npm run dev"])
+        else:
+            logger.info("✅ 发现已有运行中的服务器，跳过启动步骤")
+            self.live2d_view.setUrl(QUrl("http://localhost:5173"))
+            logger.info("✅ liv2d加载成功")
 
     def send_message(self):
         if self.is_voice_mode or self.forbid_change.is_set() or self.wait_for_get.is_set(): return
@@ -992,6 +1050,8 @@ class ChatPage(QWidget):
         colors = {"info": "#87CEFA", "warn": "#ffb86c", "error": "#ff5555"}
         if hasattr(self, 'ToastNotification'): 
             ToastNotification(self, message, colors.get(level, "#87CEFA"))
+
+# =================================LogPage=============================================
 
 class LogPage(BasePage):
     def __init__(self):
@@ -1172,6 +1232,8 @@ class LogPage(BasePage):
             combo_box.addItems(files)
         else:
             combo_box.addItem("目录不存在")
+
+# =============================MonitorPage=============================================
 
 class FloatingMonitor(QWidget):
     def __init__(self):
@@ -1432,6 +1494,8 @@ class MonitorPage(BasePage):
             try: pynvml.nvmlShutdown()
             except: pass
 
+# ================================SettingPage=============================================
+
 class SettingPage(BasePage):
     def __init__(self):
         super().__init__("SETTINGS", "系统参数配置")
@@ -1581,13 +1645,21 @@ class SettingPage(BasePage):
             except: pass
 
     def apply_config_to_ui(self):
+        stored_model = self.config.get("model_name", "DeepSeek-V3")
+        display_name = stored_model 
+        for name, full_path in self.SiliconCloud_model.items():
+            if full_path == stored_model:
+                display_name = name
+                break
+        self.model_select.setCurrentText(display_name)
         self.api_input.setText(self.config.get("api_key", ""))
         self.asr_combo.setCurrentText(self.config.get("asr_mode", "in"))
-        self.model_select.setCurrentText(self.config.get("model_name", "DeepSeek-V3"))
-        self.t_slider.setValue(int(self.config.get("silence_threshold", 1.0) * 10))
-        self.v_slider.setValue(int(self.config.get("volume", 0.8) * 100))
-        self.t_label.setText(f"{self.config.get('silence_threshold', 1.0)}s")
-        self.v_label.setText(f"{int(self.config.get('volume', 0.8)*100)}%")
+        threshold = self.config.get("silence_threshold", 1.0)
+        self.t_slider.setValue(int(threshold * 10))
+        self.t_label.setText(f"{float(threshold):.1f}s")
+        vol = self.config.get("volume", 0.8)
+        self.v_slider.setValue(int(vol * 100))
+        self.v_label.setText(f"{int(vol * 100)}%")
 
     def do_save_logic(self):
         old_api = self.config.get("api_key", "")
@@ -2377,13 +2449,14 @@ class MyWindow(QMainWindow, Ui_MainWindow):
     def __init__(self):
         super().__init__()
         self.setupUi(self)
+        self.resize(1200, 700)
         self.setMinimumSize(550, 350)
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         
         self.sizegrip = QSizeGrip(self.frame_size_grip)
         self.sizegrip.setStyleSheet("width: 20px; height: 20px; margin: 0px; padding: 0px;")
-        self.move(100, 100)
+        self.move(30, 30)
         self.dragPos = QPoint()
 
         self.btn_menu.overlay = ShimmerOverlay(self.btn_menu)
@@ -2426,6 +2499,11 @@ class MyWindow(QMainWindow, Ui_MainWindow):
     async def _shutdown(self):
         self.hide()
         self.DOING.set()
+        if hasattr(self, 'web_server_process'):
+            logger.info("🔪 正在关闭后台 Node 服务器...")
+            self.web_server_process.terminate()
+            if not self.web_server_process.waitForFinished(1000): # 如果 1 秒没关掉
+                self.web_server_process.kill()
         await self.clear_up.wait()
         self.close()
         loop=asyncio.get_event_loop()

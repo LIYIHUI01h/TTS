@@ -128,7 +128,7 @@ class Ui_MainWindow(object):
         self.topLogo.setGeometry(QRect(10, 5, 42, 42))
         self.topLogo.setMinimumSize(QSize(42, 42))
         self.topLogo.setMaximumSize(QSize(42, 42))
-        self.topLogo.setStyleSheet(u"border-image: url(\":/images/images/images/logo.png\") 0 0 0 0 stretch stretch;")
+        self.topLogo.setStyleSheet(u"/*border-image: url(\":/images/images/images/logo.png\") 0 0 0 0 stretch stretch;*/")
         self.topLogo.setFrameShape(QFrame.NoFrame)
         self.topLogo.setFrameShadow(QFrame.Raised)
         self.titleLeftApp = QLabel(self.topLogoInfo)

@@ -212,7 +212,7 @@ QToolTip { color: #ffffff; background-color: rgba(33, 37, 43, 180); border-left:
               </size>
              </property>
              <property name="styleSheet">
-              <string notr="true">border-image: url(&quot;:/images/images/images/logo.png&quot;) 0 0 0 0 stretch stretch;</string>
+              <string notr="true">/*border-image: url(&quot;:/images/images/images/logo.png&quot;) 0 0 0 0 stretch stretch;*/</string>
              </property>
              <property name="frameShape">
               <enum>QFrame::NoFrame</enum>

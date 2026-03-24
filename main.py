@@ -67,6 +67,7 @@ async def async_speech_part(window):
         ]
 
         await asyncio.gather(*tasks)
+        window.page_chat.start_live2d_render()
         logger.info("✅ chat界面加载成功")
         window.notify("chat界面加载成功")
     except Exception as e:
@@ -285,7 +286,7 @@ async def async_speech_part(window):
         logger.info("启动清理程序...")
         text_que.put_nowait(SHUTDOWN)
         await mm.add_memory_done.wait()
-        await mm.show_memories()
+        # await mm.show_memories()
         kill()
         set_key("config/config.env", "API_KEY", api_key)
         logger.info("✅ 资源释放完成")

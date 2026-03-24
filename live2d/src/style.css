@@ -1,0 +1,51 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #0f0f0f;
+}
+
+.ui-overlay {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  z-index: 10;
+  color: white;
+  font-family: sans-serif;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 15px;
+  border-radius: 8px;
+  pointer-events: auto;
+}
+
+.status-tag {
+  color: #42b883;
+  font-weight: bold;
+}
+
+button {
+  margin-top: 10px;
+  margin-right: 5px;
+  cursor: pointer;
+  padding: 5px 10px;
+}
+
+#live2d-container {
+  width: 100vw;
+  height: 100vh;
+  background-color: #050505 !important;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+#live2d-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: optimizeQuality;
+  transform: translateZ(0);
+}
