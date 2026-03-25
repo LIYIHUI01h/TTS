@@ -7,6 +7,7 @@ from queue import Queue
 from time import time
 from PySide6.QtWidgets import QApplication
 from mika.tool import getLogger,kill
+from mika.websockets import  WebSocketController
 from mika import async_speech,RAG
 from mika.api import async_LLM_api,SiliconCloud_model
 from qasync import QEventLoop
@@ -56,6 +57,7 @@ async def async_speech_part(window):
     tts=async_speech.GPT_SoVITSController("models/v2pp/mmk/tmp.json",log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
     ap=async_speech.AudioPlayer(log_name="audioplayer",log_path="log/speech.log")
     mm=RAG.MemoryManager(api_key,log_name="memory",log_path="log/memory.log",model=flags.model_name,user_name=flags.user_name)
+    ws = WebSocketController(host="127.0.0.1", port=8765,log_path="log/live2d.log",log_name="live2d")
     window.page_memory.memory_manager=mm
 
     try:
@@ -63,10 +65,10 @@ async def async_speech_part(window):
             llm_api.warmup(window.DOING),
             mm.api_llm.warmup(window.DOING),
             tts.start_service(window.DOING),
-            mm.load_prompt("SYSTEM_PROMPT.md",include_core_memory=False)
+            mm.load_prompt("SYSTEM_PROMPT.md",include_core_memory=False),
         ]
-
         await asyncio.gather(*tasks)
+        ws_task=asyncio.create_task(ws.start())
         window.page_chat.start_live2d_render()
         logger.info("✅ chat界面加载成功")
         window.notify("chat界面加载成功")
@@ -111,7 +113,7 @@ async def async_speech_part(window):
             try:
                 flag=True
                 llm_res=""
-                action=[]
+                action=Queue()
                 llm_json=None
                 async for res_type,output in flags.api_task:
                     if res_type=="interpt":
@@ -119,7 +121,7 @@ async def async_speech_part(window):
                         raise
                         break
                     if res_type=="action":
-                        action.append(output)
+                        action.put_nowait(output)
                         llm_res+=f"[{output}]"
                         continue
                     elif res_type=="json":
@@ -127,7 +129,11 @@ async def async_speech_part(window):
                         logger.info(llm_json)
                         break
                     llm_res+=output
-                    llm_que.put_nowait((session_id,output))
+                    try:
+                        act=action.get_nowait()
+                    except:
+                        act=None
+                    llm_que.put_nowait((session_id,output,act))
                     if api_last:
                         optimization_logger.info(f"api首次响应耗时{time()-api_last:.2f}")
                         api_last=None
@@ -146,14 +152,14 @@ async def async_speech_part(window):
     async def run_tts():
         tts_semaphore = asyncio.Semaphore(5)
         while True:
-            pii=await llm_que.get()
-            if pii==SHUTDOWN:
+            tri=await llm_que.get()
+            if tri==SHUTDOWN:
                 future_que.put_nowait(SHUTDOWN)
                 break
-            elif pii is None: 
+            elif tri is None: 
                 future_que.put_nowait(None)
                 continue
-            session_id,response=pii
+            session_id,response,act=tri
             if session_id!=flags.session_id or response=="..." or response.strip()=="":continue
 
             async def generate_tts_with_check(session_id,text):
@@ -164,20 +170,20 @@ async def async_speech_part(window):
                     return result
  
             task=asyncio.create_task(generate_tts_with_check(session_id,response))
-            future_que.put_nowait((session_id,task))
+            future_que.put_nowait((session_id,task,act,response))
         logger.info("tts任务结束")
        
     async def run_ap():
         last=None
         while True:
-            pii=await future_que.get()
+            tri=await future_que.get()
             if last is None:last=time()
-            if pii==SHUTDOWN: break
-            elif pii is None:
+            if tri==SHUTDOWN: break
+            elif tri is None:
                 flags.audioplay_done.set()
                 flags.last_audio_done=time()
                 continue
-            session_id,future=pii
+            session_id,future,act,text=tri
             if session_id != flags.session_id:
                 future.cancel()
                 continue
@@ -189,7 +195,10 @@ async def async_speech_part(window):
             flags.audioplayer_count+=1
             optimization_logger.info(f"{flags.audioplayer_count}次音频播放间隔{time()-last:.2f}")
             ap.set_volume(flags.volume)
-            await ap.play(stream)
+            if act:await ws.emit("expression",act)
+            if text:await ws.emit("text",text)
+            await ap.play(stream,ws=ws)
+            if act:await ws.emit("expression",act)
             last=time()
         logger.info("audio_player任务结束")
 
@@ -286,6 +295,7 @@ async def async_speech_part(window):
         logger.info("启动清理程序...")
         text_que.put_nowait(SHUTDOWN)
         await mm.add_memory_done.wait()
+        ws_task.cancel()
         # await mm.show_memories()
         kill()
         set_key("config/config.env", "API_KEY", api_key)

@@ -1,18 +1,88 @@
 <template>
   <div id="live2d-container">
     <canvas id="live2d-canvas" ref="canvasRef"></canvas>
+    
+    <transition name="subtitle-fade">
+      <div v-if="currentSubtitle" class="subtitle-overlay">
+        <span class="subtitle-text">{{ currentSubtitle }}</span>
+      </div>
+    </transition>
   </div>
 </template>
+
+<style scoped>
+#live2d-container {
+  position: relative; 
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+}
+
+#live2d-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.subtitle-overlay {
+  position: absolute;
+  bottom: 15%; 
+  width: 90%;
+  text-align: center;
+  pointer-events: none; 
+  z-index: 999;
+}
+
+.subtitle-text {
+  background: rgba(0, 0, 0, 0.5); 
+  color: white;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 20px;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  display: inline-block;
+  max-width: 80%;
+  line-height: 1.5;
+}
+
+.subtitle-fade-enter-active, .subtitle-fade-leave-active {
+  transition: all 0.4s ease;
+}
+.subtitle-fade-enter, .subtitle-fade-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
+}
+</style>
 
 <script setup>
 import { onMounted,onBeforeUnmount,watch, ref } from 'vue';
 import { QWebChannel } from 'qwebchannel'
+import {SocketService} from './websocket.js'
 
+const ws=new SocketService('ws://127.0.0.1:8765')
 const canvasRef = ref(null);
+
+const currentSubtitle = ref("");
+let subtitleTimer = null;
 
 let app;
 let model;
 let web_bridget=null
+
+const showSubtitle = (text) => {
+  currentSubtitle.value = text;
+  
+  if (subtitleTimer) clearTimeout(subtitleTimer);
+  
+  const duration = Math.max(500, text.length * 200);
+  
+  subtitleTimer = setTimeout(() => {
+    currentSubtitle.value = "";
+  }, duration);
+};
 
 window.CLEAR=()=>{
   console.log("Web正在释放资源...")
@@ -113,7 +183,11 @@ async function initLive2D() {
         model.y = app.screen.height * 1.1-window.offset_y; 
     };
     window.resizeModel = resizeModel;
-    resizeModel();
+
+    setTimeout(() => {
+    console.log("📏 延迟校准位置...");
+    resizeModel(); 
+    }, 100);
 
     const onResize = () => {
         requestAnimationFrame(() => {
@@ -131,9 +205,52 @@ async function initLive2D() {
   }
 }
 
+const activeExpressions = ref(new Set());
 onMounted(async () => {
   await initLive2D();
   console.log("web初始化成功")
+
+  ws.onMessage(async (type, data) => {
+    if (type == "expression" && model){
+      const manager = model.internalModel.motionManager.expressionManager;
+      const settings = model.internalModel.settings.expressions;
+
+      try {
+        let targetName = data;
+
+        if (activeExpressions.value.has(data)) {
+          console.log(`🧼 [取消叠加] 发送重置信号: re_${data}`);
+          targetName = "re_" + data;
+          activeExpressions.value.delete(data);
+        } else {
+          console.log(`🎭 [新增叠加] 发送激活信号: ${data}`);
+          activeExpressions.value.add(data);
+        }
+
+        await manager.setExpression(targetName);
+
+        console.log("📊 当前激活表情池:", Array.from(activeExpressions.value));
+        console.log("✅ Expression 切换成功");
+
+      } catch (err) {
+        console.error("💥 setExpression 环节崩溃:", err);
+      }
+    }
+    else if (type === "lip" && model) {
+    const power = data.value;
+
+    model.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', power, 0.8);
+    model.internalModel.coreModel.setParameterValueById('ParamMouthForm', 0.5, 0.8);
+
+    model.internalModel.coreModel.update();
+    }
+    else if(type=="text"&&data){
+      showSubtitle(data)
+    }
+  });
+
+  ws.connect()
+
   if (window.qt && window.qt.webChannelTransport){
     new QWebChannel(window.qt.webChannelTransport,(channel)=>{
       web_bridget=channel.objects.web_bridget;
