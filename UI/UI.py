@@ -1,4 +1,5 @@
 import base64
+import http
 import math
 import os
 import sys
@@ -25,7 +26,7 @@ from qasync import QEventLoop, asyncSlot
 from UI.main_ui import QFrame, QHBoxLayout, QLabel, QVBoxLayout, Ui_MainWindow 
 from llama_index.core.schema import TextNode
 
-logger=getLogger(log_path="log/UI.log",log_name="UI")
+logger=getLogger(log_path="log/UI.log",log_name="UI",mode='w')
 
 class ToastNotification(QWidget):
     def __init__(self, parent, message, color="#87CEFA"):
@@ -64,7 +65,7 @@ class ToastNotification(QWidget):
         self.opacity_ani.setEndValue(0.9)
         self.opacity_ani.start()
         
-        asyncio.get_event_loop().call_later(3, self.hide_toast)
+        QTimer.singleShot(3000, self.hide_toast)
 
     def hide_toast(self):
         self.opacity_ani.setDirection(QPropertyAnimation.Backward)
@@ -808,6 +809,7 @@ class ChatPage(QWidget):
         self.setup_page1() 
         self.setup_page2() 
         self.init_floating_panel()
+        self.pattern=None
 
     def setup_page1(self):
         self.page1 = QWidget()
@@ -966,12 +968,27 @@ class ChatPage(QWidget):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(('localhost', port)) == 0
 
-    def start_live2d_render(self):
+    async def start_live2d_render(self):
         if not self.is_port_open(5173):
             logger.info("🌐 检测到服务器未启动，正在自动运行 npm run dev...")
             self.web_server_process = QProcess(self)
             self.web_server_process.setWorkingDirectory("live2d")
             self.web_server_process.start("cmd", ["/c", "npm run dev"])
+
+            ready = False
+            for _ in range(20):
+                try:
+                    conn = http.client.HTTPConnection("localhost", 5173, timeout=1)
+                    conn.request("GET", "/")
+                    resp = conn.getresponse()
+                    if resp.status == 200:
+                        ready = True
+                        conn.close()
+                        break
+                except:
+                    pass
+                await asyncio.sleep(1)
+                logger.info("⏳ 等待前端页面渲染响应中...")
         else:
             logger.info("✅ 发现已有运行中的服务器，跳过启动步骤")
             self.live2d_view.setUrl(QUrl("http://localhost:5173"))
@@ -2443,7 +2460,7 @@ class MemoryEditorWindow(QWidget):
                     object.__setattr__(node, 'embedding', new_vector)
                     update_nodes.append(node)
                 if update_nodes: await self.memory_manager.index.ainsert_nodes(update_nodes)
-        except Exception as e: self.logger.info(f"❌ 同步失败: {e}")
+        except Exception as e: logger.info(f"❌ 同步失败: {e}")
 
 class MyWindow(QMainWindow, Ui_MainWindow):
     def __init__(self):

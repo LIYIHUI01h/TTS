@@ -1,18 +1,18 @@
 import os
-from datetime import datetime
+import json
 import asyncio
-from dotenv import load_dotenv,set_key
-from UI.UI import MyWindow
-from queue import Queue
 from time import time
-from PySide6.QtWidgets import QApplication
-from mika.tool import getLogger,kill
-from mika.websockets import  WebSocketController
-from mika import async_speech,RAG
-from mika.api import async_LLM_api,SiliconCloud_model
+from queue import Queue
+from UI.UI import MyWindow
 from qasync import QEventLoop
-from threading import Thread
-from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from mika import async_speech,RAG
+from mika.tool import getLogger,kill
+from dotenv import load_dotenv,set_key
+from PySide6.QtWidgets import QApplication
+from mika.agent import AgentSkillsController
+from mika.websockets import  WebSocketController
+from mika.api import async_LLM_api,SiliconCloud_model
 
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--enable-gpu --num-raster-threads=4"
 os.environ["NO_PROXY"] = "localhost,127.0.0.1"
@@ -32,15 +32,14 @@ class GlobalVar:
         self.api_task=None
         self.last_audio_done=time()
         self.user_name="游客"
-        self.agent_name="浅宜"
     def add_var(self,new_config):
         for key,value in new_config.items():
             setattr(self,key,value)
 
 async def async_speech_part(window):
     os.makedirs("log",exist_ok=True)
-    logger=getLogger(log_name="main",log_path="log/speech.log")
-    optimization_logger=getLogger(log_name="async_speech_part",log_path="log/optimization.log")
+    logger=getLogger(log_name="main",log_path="log/speech.log",mode='w')
+    optimization_logger=getLogger(log_name="async_speech_part",log_path="log/optimization.log",mode='w')
 
     load_dotenv("config/config.env")
     api_key = os.getenv("API_KEY")
@@ -48,28 +47,34 @@ async def async_speech_part(window):
     flags=GlobalVar()
     flags.audioplay_done.set()
     flags.add_var(window.page_setting.config)
-    flags.add_var({"api_key":api_key,"model_name":flags.model_name})
+    flags.add_var({"api_key":api_key,"model_name":flags.model_name})# model_name为完整路径
+    with open("live2d\public\models\QianYi\model_config.json",'r',encoding="utf-8") as f:
+        model_config=json.load(f)
+    flags.add_var(model_config)
+
     window.page_setting.config["api_key"]=api_key
+    window.page_chat.pattern=flags.pattern
     window.page_chat.audioplay_done=flags.audioplay_done
 
     asr=async_speech.SenseVoiceController(log_name="asr",log_path="log/speech.log")
     llm_api=async_LLM_api(api_key=api_key,log_name="llm",log_path="log/speech.log")
-    tts=async_speech.GPT_SoVITSController("models/v2pp/mmk/tmp.json",log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
+    tts=async_speech.GPT_SoVITSController(flags.tts_path,log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
     ap=async_speech.AudioPlayer(log_name="audioplayer",log_path="log/speech.log")
-    mm=RAG.MemoryManager(api_key,log_name="memory",log_path="log/memory.log",model=flags.model_name,user_name=flags.user_name)
+    mm=RAG.MemoryManager(api_key,collection_name=flags.memory_name,log_name="memory",log_path="log/memory.log",model=flags.model_name,user_name=flags.user_name,agent_name=flags.name)
+    agent=AgentSkillsController(api_key=api_key,memory_manager=mm,log_name="agent",log_path="log/agent.log")
     ws = WebSocketController(host="127.0.0.1", port=8765,log_path="log/live2d.log",log_name="live2d")
     window.page_memory.memory_manager=mm
 
     try:
         tasks = [
             llm_api.warmup(window.DOING),
-            mm.api_llm.warmup(window.DOING),
+            mm.small_api_llm.warmup(window.DOING),
             tts.start_service(window.DOING),
-            mm.load_prompt("SYSTEM_PROMPT.md",include_core_memory=False),
+            mm.load_prompt(flags.prompt_path,include_core_memory=False),
         ]
         await asyncio.gather(*tasks)
         ws_task=asyncio.create_task(ws.start())
-        window.page_chat.start_live2d_render()
+        if flags.pattern=="live2d": await window.page_chat.start_live2d_render()
         logger.info("✅ chat界面加载成功")
         window.notify("chat界面加载成功")
     except Exception as e:
@@ -103,12 +108,12 @@ async def async_speech_part(window):
             session_id,content,images=tri
             if session_id!=flags.session_id:continue
             logger.info(f"✨:{content}")
-            api_last=time()
             query_last=time()
-            message=await mm.query(query=content,images=images)
+            message=await agent.query(query=content,images=images)
             optimization_logger.info(f"记忆检索耗时:{time()-query_last:.2f}")
 
-            flags.api_task=llm_api.start( message=message,model=flags.model_name,interpt_event=window.page_chat.interpt)
+            api_last=time()
+            flags.api_task=llm_api.start( message=message,interpt_event=window.page_chat.interpt)
 
             try:
                 flag=True
@@ -287,9 +292,7 @@ async def async_speech_part(window):
         ap_task=asyncio.create_task(run_ap())
         memory_task=asyncio.create_task(mm.run_add_memory())
         main_task=asyncio.create_task(main_event_loop())
-        
         await flags.main_done.wait()
-
     finally:
         mm.new_memory_que.put_nowait(None)
         logger.info("启动清理程序...")

@@ -1,5 +1,5 @@
 {
-    "api_key": "sk-fuseptosqlwqzoboogwfemkzfcnzgnlhkixvurvrqupnkyrx",
+    "api_key": "",
     "model_name": "Qwen2.5-72B",
     "silence_threshold": 1.0,
     "volume": 0.9,
