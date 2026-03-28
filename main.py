@@ -105,15 +105,15 @@ async def async_speech_part(window):
                 llm_que.put_nowait(SHUTDOWN)
                 break
             if tri==None: break
-            session_id,content,images=tri
+            session_id,content,images,flag=tri
             if session_id!=flags.session_id:continue
             logger.info(f"✨:{content}")
             query_last=time()
-            message=await agent.query(query=content,images=images)
+            message=await agent.query(query=content,images=images,is_search=flag)
             optimization_logger.info(f"记忆检索耗时:{time()-query_last:.2f}")
 
             api_last=time()
-            flags.api_task=llm_api.start( message=message,interpt_event=window.page_chat.interpt)
+            flags.api_task=llm_api.start(message=message,interpt_event=window.page_chat.interpt)
 
             try:
                 flag=True
@@ -150,6 +150,9 @@ async def async_speech_part(window):
                 if flag: 
                     date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     date = datetime.strptime(date, "%Y-%m-%d %H:%M:%S")
+                    search_list=llm_json.get("search",[])
+                    search_message=await agent.search_skill(search_list,is_search=True)
+                    if search_message: text_que.put_nowait((flags.session_id,search_message,[],True))
                     await mm.add_memory(content,llm_json,date,flags.user_name)
                     await mm.add_short_memory(content,llm_res,date)
         logger.info("llm任务结束")
@@ -254,7 +257,7 @@ async def async_speech_part(window):
                                 logger.info(text)
                             flags.session_id+=1
                             logger.info(f"会话{flags.session_id}开始")
-                            text_que.put_nowait((flags.session_id,text,[]))
+                            text_que.put_nowait((flags.session_id,text,[],False))
                             flags.audioplay_done.clear()
 
                         elif any(word in text for word in interpts):await do_interpt()
@@ -275,7 +278,7 @@ async def async_speech_part(window):
                         images = window.page_chat.current_images
                         flags.session_id+=1
                         logger.info(f"会话{flags.session_id}开始")
-                        text_que.put_nowait((flags.session_id,text,images))
+                        text_que.put_nowait((flags.session_id,text,images,False))
                         flags.audioplay_done.clear()
                     elif window.page_chat.interpt.is_set():await do_interpt()
                     else: await asyncio.sleep(2)
