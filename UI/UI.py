@@ -5,7 +5,7 @@ import os
 import sys
 import pynvml
 import asyncio
-import datetime
+from datetime import datetime
 import copy
 import psutil
 import aiofiles
@@ -995,24 +995,29 @@ class ChatPage(QWidget):
             logger.info("✅ liv2d加载成功")
 
     def send_message(self):
-        if self.is_voice_mode or self.forbid_change.is_set() or self.wait_for_get.is_set(): return
+        if self.is_voice_mode:
+            return
+        if self.forbid_change.is_set():
+            return
+        if self.wait_for_get.is_set():
+            return
+
         content = self.chat_input.toPlainText().strip()
-        images = getattr(self.chat_input, 'image_data_list', [])
-        
-        model_name = "DeepSeek-V3"
-        self.config_path = "config/config.json"
-        if os.path.exists(self.config_path):
-            try:
-                with open(self.config_path, "r", encoding="utf-8") as f:
-                    config=json.load(f); model_name=config.get("model_name","DeepSeek-V3")
-            except: pass
+        images = list(self.chat_input.image_data_list) 
 
         if content or images:
-            if images and model_name not in self.VL_models: # VL 模型判定
-                self.notify("当前模型不支持图片输入", "warn"); return
-            img_info = f" 图片({len(images)}张)" if images else ""
-            self.text = content; self.current_images = images.copy() 
-            self.chat_input.clear_all(); self.chat_input.setFocus(); self.wait_for_get.set() 
+            try:
+                self.text = content
+                self.current_images = images
+
+                self.chat_input.clear_all() 
+                self.chat_input.setFocus()
+
+                self.wait_for_get.set() 
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
 
     @asyncSlot()
     async def toggle_mode(self):
@@ -1035,9 +1040,13 @@ class ChatPage(QWidget):
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
                 if event.modifiers() & Qt.ControlModifier:
                     self.chat_input.insertPlainText("\n")
-                elif not self.forbid_change.is_set() and not self.wait_for_get.is_set():
+                    return True 
+
+                if not self.forbid_change.is_set() and not self.wait_for_get.is_set():
                     self.send_message()
-                return True
+                    return True
+                else:
+                    return True 
         return super().eventFilter(obj, event)
 
     def on_btn_hovered(self, is_hover):
@@ -2450,17 +2459,46 @@ class MemoryEditorWindow(QWidget):
     async def _do_final_sync(self):
         try:
             if self.pending_deletes:
-                await self.memory_manager.aclient.delete(collection_name=self.memory_manager.collection_name, points_selector=list(self.pending_deletes))
+                await self.memory_manager.aclient.delete(
+                    collection_name=self.memory_manager.collection_name, 
+                    points_selector=list(self.pending_deletes)
+                )
+
             if self.pending_updates:
                 update_nodes = []
                 for node_id, data in self.pending_updates.items():
                     new_vector = await self.memory_manager.api_embedding.start(content=data['text'])
-                    node = TextNode(id_=node_id, text=data['text'], metadata={"QA": data['QA'], "display_time": data['stime'].strftime("%Y-%m-%d %H:%M:%S"), "last_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "stimestamp": int(data['stime'].timestamp()), "etimestamp": int(datetime.now().timestamp())})
+                    
+                    node = TextNode(
+                        id_=node_id, 
+                        text=data['text'], 
+                        metadata={
+                            "QA": data['QA'], 
+                            "display_time": data['stime'].strftime("%Y-%m-%d %H:%M:%S"), 
+                            "last_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                            "stimestamp": int(data['stime'].timestamp()), 
+                            "etimestamp": int(datetime.now().timestamp())
+                        }
+                    )
+                    
                     node.excluded_embed_metadata_keys = ["QA", "display_time", "last_time", "stimestamp", "etimestamp"]
+                    
                     object.__setattr__(node, 'embedding', new_vector)
                     update_nodes.append(node)
-                if update_nodes: await self.memory_manager.index.ainsert_nodes(update_nodes)
-        except Exception as e: logger.info(f"❌ 同步失败: {e}")
+
+                if update_nodes:
+                    for n in update_nodes:
+                        try:
+                            self.memory_manager.index.docstore.delete_document(n.id_, raise_error=False)
+                        except:
+                            pass
+                    await self.memory_manager.index.ainsert_nodes(update_nodes)
+
+            self.pending_updates = {}
+            self.pending_deletes = set()
+
+        except Exception as e:
+                print(f"❌ 同步失败: {e}")
 
 class MyWindow(QMainWindow, Ui_MainWindow):
     def __init__(self):

@@ -58,6 +58,7 @@ async def async_speech_part(window):
 
     asr=async_speech.SenseVoiceController(log_name="asr",log_path="log/speech.log")
     llm_api=async_LLM_api(api_key=api_key,log_name="llm",log_path="log/speech.log")
+    pic_llm=async_LLM_api(api_key=api_key,log_name="llm",log_path="log/speech.log",model=SiliconCloud_model["Qwen2-VL-72B"])
     tts=async_speech.GPT_SoVITSController(flags.tts_path,log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
     ap=async_speech.AudioPlayer(log_name="audioplayer",log_path="log/speech.log")
     mm=RAG.MemoryManager(api_key,collection_name=flags.memory_name,log_name="memory",log_path="log/memory.log",model=flags.model_name,user_name=flags.user_name,agent_name=flags.name)
@@ -94,7 +95,7 @@ async def async_speech_part(window):
             try: llm_que.get_nowait()
             except: break
         while not future_que.empty(): 
-            try: future_que.get_nowait()
+            try: future_que.get_nowait() 
             except: break
         asyncio.sleep(1)
 
@@ -105,16 +106,17 @@ async def async_speech_part(window):
                 llm_que.put_nowait(SHUTDOWN)
                 break
             if tri==None: break
-            session_id,content,images,flag=tri
+            session_id,content,images,is_search=tri
             if session_id!=flags.session_id:continue
             logger.info(f"✨:{content}")
             query_last=time()
-            message=await agent.query(query=content,images=images,is_search=flag)
+            message=await agent.query(query=content,images=images,is_search=is_search)
             optimization_logger.info(f"记忆检索耗时:{time()-query_last:.2f}")
 
             api_last=time()
-            flags.api_task=llm_api.start(message=message,interpt_event=window.page_chat.interpt)
-
+            json_data=True if len(images)==0 else False
+            if json_data:flags.api_task=llm_api.start(message=message,interpt_event=window.page_chat.interpt,json_data=json_data)
+            else:flags.api_task=pic_llm.start(message=message,interpt_event=window.page_chat.interpt,json_data=json_data)
             try:
                 flag=True
                 llm_res=""
@@ -150,9 +152,11 @@ async def async_speech_part(window):
                 if flag: 
                     date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     date = datetime.strptime(date, "%Y-%m-%d %H:%M:%S")
+                    if llm_json is None:llm_json={"text": llm_res,"mood_change": 0,"special_info": "picture_chat","search": []}
                     search_list=llm_json.get("search",[])
                     search_message=await agent.search_skill(search_list,is_search=True)
                     if search_message: text_que.put_nowait((flags.session_id,search_message,[],True))
+                    if is_search:continue
                     await mm.add_memory(content,llm_json,date,flags.user_name)
                     await mm.add_short_memory(content,llm_res,date)
         logger.info("llm任务结束")
