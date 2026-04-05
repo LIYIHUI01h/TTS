@@ -1,10 +1,20 @@
+import os
+import os
+import sys
+os.environ["QT_PA_PLATFORM"] = "windows:dpiawareness=0"
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--enable-gpu --num-raster-threads=4"
+import ctypes
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(0)
+except Exception:
+    pass
 import base64
 import http
 import math
-import os
 import sys
 import pynvml
 import asyncio
+import base64
 from datetime import datetime
 import copy
 import psutil
@@ -238,7 +248,7 @@ class LoginDialog(QDialog):
                     "avatar_path": user.get("profile_photo_path")
                 }
         except Exception as e:
-            self.logger.info(f"自动登录异常: {e}")
+            logger.info(f"自动登录异常: {e}")
         return None
 
     def toggle_mode(self):
@@ -342,7 +352,7 @@ def get_round_pixmap(path, size):
     
     painter = QPainter(out)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform) # 增加平滑度
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform) 
     
     path_circle = QPainterPath()
     path_circle.addEllipse(0, 0, size, size)
@@ -436,10 +446,12 @@ class ProfileHoverCard(QFrame):
     def _on_out(self): self.logout_cb(); self.set_user_data(None)
 
 class HomePage(QWidget):
-    def __init__(self):
+    def __init__(self,flags):
         super().__init__()
+        self.flags=flags
         self.user_data = None 
         self.user_name="游客"
+        self.flags.user_name=self.user_name
         self.init_ui()
 
         self.card_widget = ProfileHoverCard(self, self._exec_login, self._exec_logout)
@@ -557,7 +569,7 @@ class HomePage(QWidget):
             data = d.get_user_info()
             if data:
                 self.user_name = data.get("username", "游客")
-                
+                self.flags.user_name=self.user_name
                 settings = QSettings("MikaApp", "LoginSettings")
                 settings.setValue("auto_login", True)
                 settings.setValue("user_data", data)
@@ -574,8 +586,11 @@ class HomePage(QWidget):
 
     def apply_user_state(self, data):
         self.user_data = data
-        self.user_name = data.get("username", "游客")
+        self.user_name= "游客"
+        self.flags.user_name=self.user_name
         if data:
+            self.user_name = data.get("username", "游客")
+            self.flags.user_name=self.user_name
             pix = get_round_pixmap(data.get("avatar_path"), 45)
             if pix:
                 self.avatar_label.setPixmap(pix)
@@ -596,6 +611,7 @@ class HomePage(QWidget):
             saved_data = settings.value("user_data")
             if saved_data:
                 self.user_name = saved_data.get("username", "游客")
+                self.flags.user_name=self.user_name
                 self.apply_user_state(saved_data)
 
 # ================================ChatPage=============================================
@@ -759,8 +775,9 @@ class HoverButton(QPushButton):
 from live2d.live2d_UI import CustomPage
 
 class ChatPage(QWidget):
-    def __init__(self):
+    def __init__(self,flags):
         super().__init__()
+        self.flags=flags
         self.is_voice_mode = False
         self.interpt = asyncio.Event()
         self.forbid_change = asyncio.Event()
@@ -800,7 +817,7 @@ class ChatPage(QWidget):
         self.toggle_ex_btn.clicked.connect(self.on_ex_btn_clicked)
 
         self.live2d_view = QWebEngineView()
-        self.live2d_view.page().setBackgroundColor(QColor("#050505"))
+        self.live2d_view.page().setBackgroundColor(Qt.transparent)
         self.live2d_page = CustomPage(self.live2d_view)
         self.live2d_view.setPage(self.live2d_page)
         self.live2d_view.setUrl(QUrl("http://localhost:5173")) 
@@ -808,8 +825,22 @@ class ChatPage(QWidget):
 
         self.setup_page1() 
         self.setup_page2() 
+        self.init_history_view()
         self.init_floating_panel()
         self.pattern=None
+        self.server_started = False
+
+    def init_history_view(self):
+        self.history_widget = QWidget()
+        self.history_widget.setStyleSheet("background: transparent;")
+
+        self.history_layout = QVBoxLayout(self.history_widget)
+        self.history_layout.setContentsMargins(15, 15, 15, 15)
+        self.history_layout.setSpacing(15)
+        self.history_layout.addStretch()
+
+        self.history_area.setWidget(self.history_widget)
+        self.history_area.setWidgetResizable(True)
 
     def setup_page1(self):
         self.page1 = QWidget()
@@ -822,7 +853,7 @@ class ChatPage(QWidget):
         self.v_splitter.setStyleSheet("QSplitter::handle { background: #2c313c; }")
 
         self.unity_area = QFrame()
-        self.unity_area.setStyleSheet("background-color: #050505; border: none;")
+        self.unity_area.setStyleSheet("background: transparent; border: none;")
 
         self.u_layout = QVBoxLayout(self.unity_area)
         self.u_layout.setContentsMargins(0, 0, 0, 0) 
@@ -856,7 +887,7 @@ class ChatPage(QWidget):
         self.h_splitter.setStyleSheet("QSplitter::handle { background: #2c313c; }")
 
         self.p2_left_area = QFrame() 
-        self.p2_left_area.setStyleSheet("background: #050505; border: none;")
+        self.p2_left_area.setStyleSheet("background: transparent; border: none;")
         self.p2_u_layout = QVBoxLayout(self.p2_left_area)
         self.p2_u_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -864,12 +895,16 @@ class ChatPage(QWidget):
         right_panel.setStyleSheet("background: #1d2127; border-left: 1px solid #2c313c;")
         rv = QVBoxLayout(right_panel)
         rv.setContentsMargins(0, 0, 0, 0)
+        self.right_v_splitter = QSplitter(Qt.Vertical) 
+        self.right_v_splitter.setHandleWidth(1)
+        self.right_v_splitter.setStyleSheet("QSplitter::handle { background: #2c313c; }")
 
         self.history_area = QScrollArea()
         self.history_area.setStyleSheet("background: transparent; border: none;")
 
         self.p2_input_box = QFrame()
-        self.p2_input_box.setFixedHeight(85)
+        # self.p2_input_box.setFixedHeight(85)
+        self.p2_input_box.setMinimumHeight(85)
         self.p2_v_lay = QVBoxLayout(self.p2_input_box)
         self.p2_v_lay.setContentsMargins(0, 0, 0, 0)
 
@@ -878,40 +913,166 @@ class ChatPage(QWidget):
         self.p2_h_row.setSpacing(10)
         self.p2_v_lay.addLayout(self.p2_h_row) 
 
-        rv.addWidget(self.history_area)
-        rv.addWidget(self.p2_input_box)
+        self.right_v_splitter.addWidget(self.history_area)
+        self.right_v_splitter.addWidget(self.p2_input_box)
+        self.right_v_splitter.setStretchFactor(0, 1)
+        self.right_v_splitter.setStretchFactor(1, 0)
+        self.right_v_splitter.setSizes([10000,85])
+
+        rv.addWidget(self.right_v_splitter)
+
+        # rv.addWidget(self.history_area)
+        # rv.addWidget(self.p2_input_box)
 
         self.h_splitter.addWidget(self.p2_left_area)
         self.h_splitter.addWidget(right_panel)
         lay.addWidget(self.h_splitter)
         self.main_stack.addWidget(self.page2)
 
+    def init_history_view(self):
+        self.history_widget = QWidget()
+        self.history_widget.setStyleSheet("background: transparent;")
+
+        self.history_layout = QVBoxLayout(self.history_widget)
+        self.history_layout.setContentsMargins(15, 15, 15, 15)
+        self.history_layout.setSpacing(15)
+        self.history_layout.addStretch()
+
+        self.history_area.setWidget(self.history_widget)
+        self.history_area.setWidgetResizable(True) 
+
+    def add_chat_item(self, content, is_user=True, is_forced_image=False):
+        if not hasattr(self, 'history_layout') or self.history_layout is None:
+            self.init_history_view()
+
+        bubble = QFrame()
+        bubble.setObjectName("chat_bubble")
+        bubble_layout = QHBoxLayout(bubble)
+        bubble_layout.setContentsMargins(0, 5, 0, 5)
+        bubble_layout.setSpacing(10)
+
+        display_widget = None
+        pixmap = QPixmap()
+        is_image_success = False
+
+        if is_forced_image:
+            try:
+                b64_data = content.split(",")[1] if "," in content else content
+                img_bytes = base64.b64decode(b64_data)
+                if pixmap.loadFromData(img_bytes):
+                    is_image_success = True
+            except Exception as e:
+                logger.info(f"图片解码失败: {e}")
+
+        if not is_image_success:
+            if isinstance(content, (QPixmap, QImage)):
+                pixmap = QPixmap(content) if isinstance(content, QImage) else content
+                is_image_success = not pixmap.isNull()
+            elif isinstance(content, str) and len(content) < 512:
+                if content.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')) and os.path.exists(content):
+                    pixmap = QPixmap(content)
+                    is_image_success = not pixmap.isNull()
+
+        area_w = self.history_area.viewport().width() 
+        current_width = area_w if area_w > 100 else 400 
+
+        if is_image_success:
+            display_widget = QLabel()
+            max_w = int(current_width * 0.6)
+            scaled_pix = pixmap.scaled(max_w, 1200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            display_widget.setPixmap(scaled_pix)
+            display_widget.setStyleSheet("border-radius: 8px; border: 1px solid #2c313c;")
+        else:
+            text_content = str(content)
+            if len(text_content) > 5000:
+                text_content = text_content[:5000] + "\n\n[内容过长已截断...]"
+
+            display_widget = QLabel(text_content)
+            display_widget.setWordWrap(True)
+            display_widget.setMinimumWidth(50)
+            display_widget.setMaximumWidth(int(current_width * 0.75))
+
+            bg_color = "#2b5278" if is_user else "#2c313c"
+            text_color = "#ffffff" if is_user else "#dcdfe4"
+            display_widget.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {bg_color}; 
+                    color: {text_color}; 
+                    border-radius: 12px; 
+                    padding: 10px 15px; 
+                    font-size: 14px;
+                    line-height: 1.4;
+                }}
+            """)
+
+        if is_user:
+            bubble_layout.addStretch()
+            bubble_layout.addWidget(display_widget)
+        else:
+            bubble_layout.addWidget(display_widget)
+            bubble_layout.addStretch()
+
+        count = self.history_layout.count()
+        index = max(0, count - 1)
+        self.history_layout.insertWidget(index, bubble)
+
+        bubble.show()
+        QTimer.singleShot(50, self._scroll_to_bottom)
+
+    def _scroll_to_bottom(self):
+        """滚动到底部"""
+        bar = self.history_area.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
     def init_floating_panel(self):
         self.floating_panel = QFrame(self)
-        self.floating_panel.setFixedSize(135, 50)
-        self.floating_panel.setStyleSheet("background: #2c313c; border: 1px solid #4e5565; border-radius: 10px;")
-        fl = QHBoxLayout(self.floating_panel); fl.setContentsMargins(5,5,5,5)
+        self.floating_panel.setFixedSize(180, 50) 
+        self.floating_panel.setStyleSheet("""
+            QFrame { background: #2c313c; border: 1px solid #4e5565; border-radius: 10px; }
+        """)
 
-        self.mode_btn = QPushButton("🎤", self.floating_panel) 
-        self.mode_btn.clicked.connect(self.toggle_mode)
+        fl = QHBoxLayout(self.floating_panel)
+        fl.setContentsMargins(10, 5, 10, 5) 
+        fl.setSpacing(8) 
 
-        btn_file = QPushButton("📁", self.floating_panel)
-        btn_file.clicked.connect(self.upload_image_dialog)
-        
-        btn_sw = QPushButton("⇌", self.floating_panel)
-        btn_sw.clicked.connect(self.toggle_layout)
+        self.btn_mode = QPushButton("🎤", self.floating_panel)
+        self.btn_file = QPushButton("📁", self.floating_panel)
+        self.btn_sw = QPushButton("⇌", self.floating_panel)
+        self.btn_refresh = QPushButton("🔄", self.floating_panel)
 
-        for b in [btn_file, self.mode_btn, btn_sw]:
+        self.btn_mode.clicked.connect(self.toggle_mode)
+        self.btn_file.clicked.connect(self.upload_image_dialog)
+        self.btn_sw.clicked.connect(self.toggle_layout)
+        self.btn_refresh.clicked.connect(self.start_live2d_render)
+
+        for b in [self.btn_file, self.btn_mode, self.btn_sw, self.btn_refresh]:
             b.setFixedSize(32, 32)
             b.setStyleSheet("background: #3e4451; color: white; border-radius: 6px; border: none;")
             fl.addWidget(b)
-        
+
         self.floating_panel.hide()
         self.hide_timer = QTimer()
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.floating_panel.hide)
-        self.floating_panel.enterEvent = lambda e: self.hide_timer.stop()
-        self.floating_panel.leaveEvent = lambda e: self.hide_timer.start(300)
+
+        def on_enter(event):
+            self.hide_timer.stop()
+        
+        def on_leave(event):
+            self.hide_timer.start(300)
+
+        self.floating_panel.enterEvent = on_enter
+        self.floating_panel.leaveEvent = on_leave
+
+    def show_panel_at_right(self, target_right_x, y_pos):
+        panel_width = 180 
+        new_x = target_right_x - panel_width
+        
+        self.floating_panel.setFixedSize(panel_width, 50)
+        self.floating_panel.move(new_x, y_pos)
+        
+        self.floating_panel.show()
+        self.floating_panel.raise_()
 
     def update_ui_state(self):
         if self.is_voice_mode and not self.asr_prepare.is_set():return
@@ -968,53 +1129,66 @@ class ChatPage(QWidget):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(('localhost', port)) == 0
 
+    @asyncSlot()
     async def start_live2d_render(self):
         if not self.is_port_open(5173):
-            logger.info("🌐 检测到服务器未启动，正在自动运行 npm run dev...")
-            self.web_server_process = QProcess(self)
-            self.web_server_process.setWorkingDirectory("live2d")
-            self.web_server_process.start("cmd", ["/c", "npm run dev"])
-
-            ready = False
-            for _ in range(20):
-                try:
-                    conn = http.client.HTTPConnection("localhost", 5173, timeout=1)
-                    conn.request("GET", "/")
-                    resp = conn.getresponse()
-                    if resp.status == 200:
-                        ready = True
-                        conn.close()
-                        break
-                except:
-                    pass
-                await asyncio.sleep(1)
-                logger.info("⏳ 等待前端页面渲染响应中...")
+            logger.info("🌐 检测到服务器未启动，正在启动...")
+            if not hasattr(self, 'web_server_process') or self.web_server_process is None:
+                self.web_server_process = QProcess(self)
+                self.web_server_process.setWorkingDirectory("live2d")
+                self.web_server_process.start("cmd", ["/c", "npm run dev"])
+            self.server_started = True
         else:
-            logger.info("✅ 发现已有运行中的服务器，跳过启动步骤")
-            self.live2d_view.setUrl(QUrl("http://localhost:5173"))
-            logger.info("✅ liv2d加载成功")
+            self.server_started = True
+
+        try:
+            self.live2d_view.loadFinished.disconnect()
+        except:
+            pass
+        self.live2d_view.loadFinished.connect(self._on_live2d_load_done)
+        self._final_render_init()
+
+        logger.info("🚀 正在载入 Live2D 页面...")
+        self.live2d_view.setUrl(QUrl("http://localhost:5173"))
+
+    def _on_live2d_load_done(self, success):
+        """网页 index.html 载入完成后的回调"""
+        if success:
+            logger.info("✅ 网页框架载入完成，等待组件初始化...")
+            QTimer.singleShot(1000, self._final_render_init)
+        else:
+            logger.error("❌ 网页加载失败，请检查前端服务是否运行在 5173 端口")
+
+    def _final_render_init(self):
+        logger.info("🎨 开始初始化模型和背景渲染...")
+        self.set_live2d_model(self.flags.model_path, self.flags.mouthparam)
+        bg_relative_path = os.path.join("background", self.flags.live2d_bg).replace("\\", "/")
+        self.set_live2d_background(bg_relative_path)
 
     def send_message(self):
-        if self.is_voice_mode:
-            return
-        if self.forbid_change.is_set():
-            return
-        if self.wait_for_get.is_set():
+        if self.is_voice_mode or self.forbid_change.is_set() or self.wait_for_get.is_set():
             return
 
         content = self.chat_input.toPlainText().strip()
         images = list(self.chat_input.image_data_list) 
 
         if content or images:
+            for img_b64 in images:
+                self.add_chat_item(img_b64, is_user=True, is_forced_image=True)
+
+            if content:
+                self.add_chat_item(content, is_user=True)
+
             try:
                 self.text = content
                 self.current_images = images
 
-                self.chat_input.clear_all() 
+                self.chat_input.clear_all()
                 self.chat_input.setFocus()
 
                 self.wait_for_get.set() 
-
+                self.chat_input.clear()
+                self.chat_input.setFocus()
             except Exception as e:
                 import traceback
                 traceback.print_exc()
@@ -1055,12 +1229,16 @@ class ChatPage(QWidget):
             return
 
         if is_hover:
+            self.hide_timer.stop() 
+            if self.floating_panel.isVisible():
+                return
+                
             self.update_ex_btn_style()
             
             btn_pos = self.toggle_ex_btn.mapTo(self, QPoint(0, 0))
-            self.floating_panel.move(btn_pos.x() - 100, btn_pos.y() - 55)
-            self.floating_panel.show()
-            self.floating_panel.raise_()
+            target_right = btn_pos.x() + self.toggle_ex_btn.width()
+            target_y = btn_pos.y() - 55
+            self.show_panel_at_right(target_right, target_y)
         else:
             self.hide_timer.start(300)
 
@@ -1072,6 +1250,18 @@ class ChatPage(QWidget):
         super().showEvent(event)
         QTimer.singleShot(50, lambda: self.v_splitter.setSizes([self.height()-100, 100]))
 
+    def set_live2d_model(self, model_path,mouth_param):
+        js_code = f"window.loadModel('{model_path}', '{mouth_param}')"
+        self.live2d_view.page().runJavaScript(js_code)
+        if self.flags.name=="浅宜":
+            self.live2d_view.page().runJavaScript("model.internalModel.coreModel.setParameterValueById('Param123', 1.0);")
+        logger.info(f"尝试加载模型路径 -> {model_path}")
+
+    def set_live2d_background(self, bg_path):
+        js_code = f"if(window.loadBackground) {{ window.loadBackground('{bg_path}'); }} else {{ console.error('loadBackground not found'); }}"
+        self.live2d_view.page().runJavaScript(js_code)
+        logger.info(f"尝试切换背景 -> {bg_path}")
+
     def notify(self, message, level="info"):
         colors = {"info": "#87CEFA", "warn": "#ffb86c", "error": "#ff5555"}
         if hasattr(self, 'ToastNotification'): 
@@ -1080,10 +1270,11 @@ class ChatPage(QWidget):
 # =================================LogPage=============================================
 
 class LogPage(BasePage):
-    def __init__(self):
+    def __init__(self,flags):
         super().__init__("SYSTEM LOGS", "支持多窗口对齐查看与实时跟踪")
+        self.flags=flags
         self.layout.setContentsMargins(15, 10, 15, 0) 
-        self.log_dir = r"D:\filedir\github\my\TTS\log"
+        self.log_dir = "log"
         self.viewers = [] 
         self.floating_log_win = None
 
@@ -1160,7 +1351,7 @@ class LogPage(BasePage):
             except asyncio.CancelledError:
                 break 
             except Exception as e:
-                self.logger.info(f"日志更新出错: {e}")
+                logger.info(f"日志更新出错: {e}")
                 await asyncio.sleep(5)
 
     async def refresh_all_viewers(self):
@@ -1195,13 +1386,11 @@ class LogPage(BasePage):
             if display_widget.toPlainText() != content:
                 v_bar = display_widget.verticalScrollBar()
                 at_bottom = v_bar.value() >= v_bar.maximum() - 50
-                
                 display_widget.setPlainText(content)
-                
                 if at_bottom:
                     display_widget.moveCursor(QTextCursor.End)
         except Exception as e:
-            self.logger.info(f"文件读取出错({filename}): {e}")
+            logger.info(f"文件读取出错({filename}): {e}")
 
     def add_viewer(self):
         if len(self.viewers) >= 3:
@@ -1378,10 +1567,10 @@ class FloatingMonitor(QWidget):
         painter.drawText(rect.right() - 30, rect.top() + 15, f"{int(display_data[-1])}%")
 
 class MonitorPage(BasePage):
-    def __init__(self):
+    def __init__(self,flags):
         super().__init__("PERFORMANCE", "硬件资源实时负载监控")
         self.layout.setContentsMargins(10, 5, 10, 0)
-        
+        self.flags=flags
         sub_title_label = self.layout.itemAt(1).widget()
         header_row = QHBoxLayout()
         header_row.addWidget(sub_title_label)
@@ -1476,7 +1665,7 @@ class MonitorPage(BasePage):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self.logger.info(f"性能监视出错: {e}")
+                logger.info(f"性能监视出错: {e}")
                 await asyncio.sleep(1)
 
     def update_bar_style(self, bar, value, label):
@@ -1523,33 +1712,43 @@ class MonitorPage(BasePage):
 # ================================SettingPage=============================================
 
 class SettingPage(BasePage):
-    def __init__(self):
+    def __init__(self, flags,chatpage):
         super().__init__("SETTINGS", "系统参数配置")
-        
+        self.flags = flags
+        self.chatpage=chatpage
         self.config_path = "config/config.json"
-        
+        self.base_model_path = os.path.join("live2d", "public", "models")
+        self.base_bg_path = os.path.join("live2d", "public", "background")
+        from mika.api import SiliconCloud_model
         self.SiliconCloud_model = SiliconCloud_model
-
-        self.config = {
-            "api_key": "",
-            "model_name": SiliconCloud_model["DeepSeek-V3"],
-            "silence_threshold": 1.0,
-            "volume": 0.8,
-            "asr_mode": "in"
-        }
         
         self.load_config_from_file()
         self.setup_setting_ui()
         self.apply_config_to_ui()
 
+    def get_local_models(self):
+        if not os.path.exists(self.base_model_path):
+            return ["QianYi"]
+        models = [f for f in os.listdir(self.base_model_path) if os.path.isdir(os.path.join(self.base_model_path, f))]
+        return models if models else ["QianYi"]
+
+    def get_local_backgrounds(self):
+        if not os.path.exists(self.base_bg_path):
+            return ["bk4.png"]
+        valid_exts = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
+        bgs = [f for f in os.listdir(self.base_bg_path) if f.lower().endswith(valid_exts)]
+        return bgs if bgs else ["bk4.png"]
+
     def showEvent(self, event: QShowEvent):
-        """每次切回设置页面时，强制从文件同步，丢弃未保存的临时改动"""
         super().showEvent(event)
         self.load_config_from_file()
+        self.live2d_model_combo.clear()
+        self.live2d_model_combo.addItems(self.get_local_models())
+        self.live2d_bg_combo.clear()
+        self.live2d_bg_combo.addItems(self.get_local_backgrounds())
         self.apply_config_to_ui()
 
     def setup_setting_ui(self):
-        """构建 UI 布局"""
         self.container_layout.setSpacing(12)
         self.container_layout.setContentsMargins(10, 5, 10, 5)
 
@@ -1557,17 +1756,27 @@ class SettingPage(BasePage):
         self.api_input.setEchoMode(QLineEdit.Password)
         self.api_input.setObjectName("settingInput")
         self.api_input.setPlaceholderText("填入 API Key...")
-        self.create_row("API 密钥", "修改密钥后需重启程序以重新初始化服务", self.api_input)
+        self.create_row("API 密钥", "修改密钥后需重载服务以重新初始化", self.api_input)
 
         self.asr_combo = QComboBox()
         self.asr_combo.addItems(["in", "out"])
         self.asr_combo.setObjectName("settingCombo")
-        self.create_row("识别模式", "in: 录制系统内部声音 | out: 录制麦克风声音", self.asr_combo)
+        self.create_row("识别模式", "in: 系统内部声音 | out: 麦克风输入", self.asr_combo)
 
         self.model_select = QComboBox()
         self.model_select.addItems(list(self.SiliconCloud_model.keys()))
         self.model_select.setObjectName("settingCombo")
-        self.create_row("思维核心", "选择当前对话使用的云端大模型", self.model_select)
+        self.create_row("思维核心", "选择云端大模型驱动对话", self.model_select)
+
+        self.live2d_model_combo = QComboBox()
+        self.live2d_model_combo.addItems(self.get_local_models())
+        self.live2d_model_combo.setObjectName("settingCombo")
+        self.create_row("看板角色", "加载 live2d/public/models 下的角色文件夹", self.live2d_model_combo)
+
+        self.live2d_bg_combo = QComboBox()
+        self.live2d_bg_combo.addItems(self.get_local_backgrounds())
+        self.live2d_bg_combo.setObjectName("settingCombo")
+        self.create_row("场景背景", "加载 live2d/public/background 下的图片", self.live2d_bg_combo)
 
         self.t_slider = QSlider(Qt.Horizontal)
         self.t_slider.setRange(5, 30)
@@ -1594,184 +1803,137 @@ class SettingPage(BasePage):
         self.container_layout.addSpacing(15)
         btn_container = QHBoxLayout()
         btn_container.addStretch()
-        
         self.save_btn = QPushButton("保存设置")
         self.save_btn.setFixedSize(110, 32)
         self.save_btn.setObjectName("saveButton")
         self.save_btn.setCursor(Qt.PointingHandCursor)
         self.save_btn.clicked.connect(self.do_save_logic)
-        
         btn_container.addWidget(self.save_btn)
         self.container_layout.addLayout(btn_container)
-
         self.container_layout.addStretch()
+        self.apply_styles()
 
+    def apply_styles(self):
         self.setStyleSheet("""
-            #settingInput, #settingCombo {
-                background: #1a1d22;
-                color: #e0e0e0;
-                border: 1px solid #3d444d;
-                border-radius: 4px;
-                padding: 4px;
-            }
-            #saveButton {
-                background: transparent;
-                color: #bd93f9;
-                border: 1px solid #bd93f9;
-                border-radius: 4px;
-                font-weight: bold;
-            }
+            #settingInput, #settingCombo { background: #1a1d22; color: #e0e0e0; border: 1px solid #3d444d; border-radius: 4px; padding: 4px; }
+            #saveButton { background: transparent; color: #bd93f9; border: 1px solid #bd93f9; border-radius: 4px; font-weight: bold; }
             #saveButton:hover { background: rgba(189, 147, 249, 0.1); }
-            #saveButton:pressed { background: rgba(189, 147, 249, 0.2); }
             QSlider::groove:horizontal { height: 4px; background: #3d444d; border-radius: 2px; }
             QSlider::handle:horizontal { background: #bd93f9; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }
         """)
 
-    def create_row(self, title, desc, content):
-        """每一行设置项的容器封装"""
-        card = QFrame()
-        card.setObjectName("SettingCard")
-        card.setStyleSheet("#SettingCard { background: rgba(30, 34, 39, 200); border: 1px solid #2d323b; border-radius: 10px; }")
-        
-        row_layout = QHBoxLayout(card)
-        row_layout.setContentsMargins(15, 10, 15, 10)
-
-        text_widget = QWidget()
-        text_layout = QVBoxLayout(text_widget)
-        text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(2)
-        
-        t_lbl = QLabel(title)
-        t_lbl.setStyleSheet("color: #bd93f9; font-weight: bold; font-size: 14px; background:transparent;")
-        d_lbl = QLabel(desc)
-        d_lbl.setStyleSheet("color: #717e95; font-size: 11px; background:transparent;")
-        
-        text_layout.addWidget(t_lbl)
-        text_layout.addWidget(d_lbl)
-        
-        row_layout.addWidget(text_widget, 4)
-        row_layout.addStretch(1)
-        
-        if isinstance(content, QHBoxLayout):
-            row_layout.addLayout(content, 3)
-        else:
-            content.setFixedWidth(220)
-            row_layout.addWidget(content, 3)
-        
-        self.container_layout.addWidget(card)
-
     def load_config_from_file(self):
         if os.path.exists(self.config_path):
             try:
-                key=self.config["api_key"]
                 with open(self.config_path, "r", encoding="utf-8") as f:
-                    self.config.update(json.load(f))
-                if key:self.config["api_key"]=key
-                self.config["model_name"]=SiliconCloud_model[self.config["model_name"]]
-            except: pass
+                    data = json.load(f)
+                    for key, value in data.items():
+                        setattr(self.flags, key, value)
+                
+                m_name = getattr(self.flags, "live2d_model", None)
+                if m_name:
+                    self.parse_model_extra_config(m_name)
+            except Exception as e:
+                logger.error(f"设置参数读取失败: {e}")
+
+    def parse_model_extra_config(self, model_name):
+        model_cfg_path = os.path.join(self.base_model_path, model_name, "model_config.json")
+        if os.path.exists(model_cfg_path):
+            try:
+                with open(model_cfg_path, 'r', encoding='utf-8') as f:
+                    model_extra = json.load(f)
+                    for k, v in model_extra.items():
+                        setattr(self.flags, k, v)
+            except Exception as e:
+                logger.error(f"live2d模型读取失败: {e}")
 
     def apply_config_to_ui(self):
-        stored_model = self.config.get("model_name", "DeepSeek-V3")
+        self.api_input.setText(getattr(self.flags, "api_key", ""))
+        self.asr_combo.setCurrentText(getattr(self.flags, "asr_mode", "in"))
+        stored_model = getattr(self.flags, "model_name", "DeepSeek-V3")
         display_name = stored_model 
         for name, full_path in self.SiliconCloud_model.items():
             if full_path == stored_model:
                 display_name = name
                 break
         self.model_select.setCurrentText(display_name)
-        self.api_input.setText(self.config.get("api_key", ""))
-        self.asr_combo.setCurrentText(self.config.get("asr_mode", "in"))
-        threshold = self.config.get("silence_threshold", 1.0)
-        self.t_slider.setValue(int(threshold * 10))
-        self.t_label.setText(f"{float(threshold):.1f}s")
-        vol = self.config.get("volume", 0.8)
-        self.v_slider.setValue(int(vol * 100))
-        self.v_label.setText(f"{int(vol * 100)}%")
+        self.live2d_model_combo.setCurrentText(getattr(self.flags, "live2d_model", "QianYi"))
+        self.live2d_bg_combo.setCurrentText(getattr(self.flags, "live2d_bg", "bk4.png"))
+        self.t_slider.setValue(int(getattr(self.flags, "silence_threshold", 1.0) * 10))
+        self.v_slider.setValue(int(getattr(self.flags, "volume", 0.8) * 100))
 
     def do_save_logic(self):
-        old_api = self.config.get("api_key", "")
-        old_asr = self.config.get("asr_mode", "in")
-
+        old_api = getattr(self.flags, "api_key", "")
+        old_asr = getattr(self.flags, "asr_mode", "in")
         new_api = self.api_input.text()
         new_asr = self.asr_combo.currentText()
-
-        need_restart = (new_api != old_api) or (new_asr != old_asr)
-
-        if need_restart:
+        
+        if (new_api != old_api) or (new_asr != old_asr):
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("核心参数变更")
-            msg_box.setText("检测到 API 密钥或识别模式变动，这需要重启核心服务。\n是否应用更改？")
-
+            msg_box.setText("API密钥或模式变动需重载服务。\n确定应用？")
             yes_btn = msg_box.addButton("立即重载", QMessageBox.YesRole)
             no_btn = msg_box.addButton("取消修改", QMessageBox.NoRole)
-            msg_box.setDefaultButton(yes_btn)
-
-            msg_box.setStyleSheet(f"""
-                QMessageBox {{
-                    background-color: #1d2127;
-                    border: 1px solid #87CEFA;
-                }}
-                QLabel {{
-                    color: #ffffff;
-                    font-family: 'Microsoft YaHei';
-                    padding: 10px;
-                    min-width: 300px;
-                }}
-                QPushButton {{
-                    border: 1px solid #87CEFA;
-                    border-radius: 3px;
-                    padding: 5px 15px;
-                    background: transparent;
-                    color: #87CEFA;
-                    font-family: 'Microsoft YaHei';
-                    min-width: 80px;
-                }}
-                QPushButton:hover {{
-                    background-color: rgba(135, 206, 250, 0.1);
-                }}
-                QPushButton:pressed {{
-                    background-color: rgba(135, 206, 250, 0.2);
-                }}
-            """)
-
-            no_btn.setStyleSheet("color: #888888; border-color: #444444;")
-
             msg_box.exec()
-
             if msg_box.clickedButton() == no_btn:
-                self.api_input.setText(old_api)
-                self.asr_combo.setCurrentText(old_asr)
-                self.notify("操作已取消", "warn")
-                return 
+                self.apply_config_to_ui()
+                return
 
-        self.config["api_key"] = new_api
-        self.config["asr_mode"] = new_asr
-        self.config["model_name"] = self.model_select.currentText()
-        self.config["silence_threshold"] = self.t_slider.value() / 10.0
-        self.config["volume"] = self.v_slider.value() / 100.0
+        current_model_name = self.live2d_model_combo.currentText()
+        new_config = {
+            "api_key": new_api,
+            "asr_mode": new_asr,
+            "model_name": self.SiliconCloud_model.get(self.model_select.currentText(), self.model_select.currentText()),
+            "live2d_model": current_model_name,
+            "live2d_bg": self.live2d_bg_combo.currentText(),
+            "silence_threshold": self.t_slider.value() / 10.0,
+            "volume": self.v_slider.value() / 100.0
+        }
 
-        clean_config = copy.deepcopy(self.config)
+        model_cfg_path = os.path.join(self.base_model_path, current_model_name, "model_config.json")
+        if os.path.exists(model_cfg_path):
+            with open(model_cfg_path, 'r', encoding='utf-8') as f:
+                new_config.update(json.load(f))
 
         try:
             with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(clean_config, f, indent=4, ensure_ascii=False)
+                json.dump(new_config, f, indent=4, ensure_ascii=False)
+            
+            for key, value in new_config.items():
+                setattr(self.flags, key, value)
 
-            main_win = self.window()
-            if hasattr(main_win, 'flags'):
-                main_win.flags.update(self.config)
-
+            m_path =self.flags.model_path
+            b_path = "background/"+self.flags.live2d_bg
+            self.chatpage.set_live2d_model(m_path,self.flags.mouthparam)
+            self.chatpage.set_live2d_background(b_path)
             self.notify("设置保存成功", "info")
         except Exception as e:
             self.notify(f"保存异常: {str(e)}", "error")
 
+    def create_row(self, title, desc, content):
+        card = QFrame()
+        card.setObjectName("SettingCard")
+        row_layout = QHBoxLayout(card)
+        row_layout.setContentsMargins(15, 10, 15, 10)
+        text_widget = QWidget()
+        text_layout = QVBoxLayout(text_widget)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        t_lbl = QLabel(title)
+        t_lbl.setStyleSheet("color: #bd93f9; font-weight: bold; font-size: 14px; background:transparent;")
+        d_lbl = QLabel(desc)
+        d_lbl.setStyleSheet("color: #717e95; font-size: 11px; background:transparent;")
+        text_layout.addWidget(t_lbl)
+        text_layout.addWidget(d_lbl)
+        row_layout.addWidget(text_widget, 4)
+        row_layout.addStretch(1)
+        if isinstance(content, QHBoxLayout): row_layout.addLayout(content, 3)
+        else:
+            content.setFixedWidth(220)
+            row_layout.addWidget(content, 3)
+        self.container_layout.addWidget(card)
+
     def notify(self, message, level="info"):
-        """
-        level: info (蓝色), warn (橙色), error (红色)
-        """
-        colors = {
-            "info": "#87CEFA",
-            "warn": "#ffb86c",
-            "error": "#ff5555"
-        }
+        colors = {"info": "#87CEFA", "warn": "#ffb86c", "error": "#ff5555"}
         ToastNotification(self, message, colors.get(level, "#87CEFA"))
 
 class ShimmerOverlay(QWidget):
@@ -1878,9 +2040,11 @@ class FloatingLogMonitor(QWidget):
                         self.display.moveCursor(QTextCursor.End)
             except: pass
 
+
 class MemoryPage(BasePage):
-    def __init__(self):
+    def __init__(self,flags):
         super().__init__("MEMORY CORE", "系统长期记忆图谱 - 仅限浏览模式")
+        self.flags=flags
         self.layout.setContentsMargins(25, 20, 25, 15)
         self.memory_manager = None
         
@@ -2200,7 +2364,7 @@ class MemoryPage(BasePage):
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.logger.info(f"❌ 加载记忆树失败: {e}")
+            logger.info(f"❌ 加载记忆树失败: {e}")
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -2252,7 +2416,7 @@ class MemoryPage(BasePage):
             if pwd_input.text() == "121176":
                 self.open_editor()
             else:
-                self.logger.info("密码错误") 
+                logger.info("密码错误") 
                 if hasattr(self.window(), 'notify'):
                     self.window().notify("密码错误", "error")
 
@@ -2268,7 +2432,7 @@ class MemoryPage(BasePage):
             
             asyncio.create_task(self.editor_window.refresh_data())
         except Exception as e:
-            self.logger.info(f"❌ 弹窗失败: {e}")
+            logger.info(f"❌ 弹窗失败: {e}")
             self.editor_window = None 
 
 class MemoryEditorWindow(QWidget):
@@ -2498,12 +2662,13 @@ class MemoryEditorWindow(QWidget):
             self.pending_deletes = set()
 
         except Exception as e:
-                print(f"❌ 同步失败: {e}")
+            logger.error(f"❌ UI记忆同步失败: {e}")
 
 class MyWindow(QMainWindow, Ui_MainWindow):
-    def __init__(self):
+    def __init__(self,flags):
         super().__init__()
         self.setupUi(self)
+        self.flags=flags
         self.resize(1200, 700)
         self.setMinimumSize(550, 350)
         self.setWindowFlags(Qt.FramelessWindowHint)
@@ -2522,12 +2687,12 @@ class MyWindow(QMainWindow, Ui_MainWindow):
             btn.overlay = ShimmerOverlay(btn)
             btn.clicked.connect(lambda checked=False, b=btn, index=i: self.apply_blue_shimmer(b, index))
 
-        self.page_home = HomePage()
-        self.page_monitor = MonitorPage()
-        self.page_log = LogPage()
-        self.page_chat = ChatPage()
-        self.page_setting = SettingPage()
-        self.page_memory=MemoryPage()
+        self.page_home = HomePage(flags)
+        self.page_monitor = MonitorPage(flags)
+        self.page_log = LogPage(flags)
+        self.page_chat = ChatPage(flags)
+        self.page_setting = SettingPage(flags,self.page_chat)
+        self.page_memory=MemoryPage(flags)
 
         while self.stackedWidget.count() > 0:
             self.stackedWidget.removeWidget(self.stackedWidget.widget(0))
@@ -2557,7 +2722,7 @@ class MyWindow(QMainWindow, Ui_MainWindow):
         if hasattr(self, 'web_server_process'):
             logger.info("🔪 正在关闭后台 Node 服务器...")
             self.web_server_process.terminate()
-            if not self.web_server_process.waitForFinished(1000): # 如果 1 秒没关掉
+            if not self.web_server_process.waitForFinished(1000):
                 self.web_server_process.kill()
         await self.clear_up.wait()
         self.close()
@@ -2588,7 +2753,7 @@ class MyWindow(QMainWindow, Ui_MainWindow):
             button.overlay.play()
         if index!=1 and index!=2:self.stackedWidget.setCurrentIndex(index)
         elif index==2 and self.prepare.is_set():self.stackedWidget.setCurrentIndex(index)
-        elif index==1 and self.prepare.is_set() and self.page_setting.config["api_key"]: self.stackedWidget.setCurrentIndex(index)
+        elif index==1 and self.prepare.is_set() and self.page_setting.flags.api_key: self.stackedWidget.setCurrentIndex(index)
         elif not self.prepare.is_set(): self.notify("界面加载中...")
         else: self.notify("未设置api_key")
 

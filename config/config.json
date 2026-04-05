@@ -1,7 +1,16 @@
 {
-    "api_key": "",
-    "model_name": "Qwen2.5-72B",
+    "api_key": "sk-fuseptosqlwqzoboogwfemkzfcnzgnlhkixvurvrqupnkyrx",
+    "asr_mode": "in",
+    "model_name": "Qwen/Qwen2.5-72B-Instruct-128K",
+    "live2d_model": "QianYi",
+    "live2d_bg": "bk4.png",
     "silence_threshold": 1.0,
-    "volume": 0.9,
-    "asr_mode": "in"
+    "volume": 0.4,
+    "name": "浅宜",
+    "model_path": "models/QianYi/QianYi.model3.json",
+    "prompt_path": "live2d/public/models/QianYi",
+    "tts_path": "models/v2pp/mmk/tmp.json",
+    "memory_name": "QianYi_memories",
+    "mouthparam": "ParamMouthOpenY",
+    "pattern": "live2d"
 }

@@ -12,9 +12,9 @@ from dotenv import load_dotenv,set_key
 from PySide6.QtWidgets import QApplication
 from mika.agent import AgentSkillsController
 from mika.websockets import  WebSocketController
+from mika.scheduled_task import IdleController
 from mika.api import async_LLM_api,SiliconCloud_model
 
-os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--enable-gpu --num-raster-threads=4"
 os.environ["NO_PROXY"] = "localhost,127.0.0.1"
 
 SHUTDOWN="***!***"
@@ -32,51 +32,46 @@ class GlobalVar:
         self.api_task=None
         self.last_audio_done=time()
         self.user_name="游客"
+        self.tts_path="models/v2pp/mmk/tmp.json"
     def add_var(self,new_config):
         for key,value in new_config.items():
             setattr(self,key,value)
 
+flags=GlobalVar()
+llm_interpt=asyncio.Event()
 async def async_speech_part(window):
+    start_last=time()
     os.makedirs("log",exist_ok=True)
     logger=getLogger(log_name="main",log_path="log/speech.log",mode='w')
     optimization_logger=getLogger(log_name="async_speech_part",log_path="log/optimization.log",mode='w')
-
-    load_dotenv("config/config.env")
-    api_key = os.getenv("API_KEY")
-
-    flags=GlobalVar()
+    api_key=flags.api_key
     flags.audioplay_done.set()
-    flags.add_var(window.page_setting.config)
-    flags.add_var({"api_key":api_key,"model_name":flags.model_name})# model_name为完整路径
-    with open("live2d\public\models\QianYi\model_config.json",'r',encoding="utf-8") as f:
-        model_config=json.load(f)
-    flags.add_var(model_config)
-
-    window.page_setting.config["api_key"]=api_key
-    window.page_chat.pattern=flags.pattern
-    window.page_chat.audioplay_done=flags.audioplay_done
 
     asr=async_speech.SenseVoiceController(log_name="asr",log_path="log/speech.log")
     llm_api=async_LLM_api(api_key=api_key,log_name="llm",log_path="log/speech.log")
     pic_llm=async_LLM_api(api_key=api_key,log_name="llm",log_path="log/speech.log",model=SiliconCloud_model["Qwen2-VL-72B"])
     tts=async_speech.GPT_SoVITSController(flags.tts_path,log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
+    # tts=async_speech.QwenTTSController(flags.tts_path,log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
     ap=async_speech.AudioPlayer(log_name="audioplayer",log_path="log/speech.log")
     mm=RAG.MemoryManager(api_key,collection_name=flags.memory_name,log_name="memory",log_path="log/memory.log",model=flags.model_name,user_name=flags.user_name,agent_name=flags.name)
     agent=AgentSkillsController(api_key=api_key,memory_manager=mm,log_name="agent",log_path="log/agent.log")
     ws = WebSocketController(host="127.0.0.1", port=8765,log_path="log/live2d.log",log_name="live2d")
+    timer=IdleController(text_que,flags)
     window.page_memory.memory_manager=mm
 
     try:
         tasks = [
             llm_api.warmup(window.DOING),
             mm.small_api_llm.warmup(window.DOING),
+            agent.small_api_llm.warmup(window.DOING),
             tts.start_service(window.DOING),
             mm.load_prompt(flags.prompt_path,include_core_memory=False),
         ]
+        if flags.pattern=="live2d": tasks.append(window.page_chat.start_live2d_render())
         await asyncio.gather(*tasks)
-        ws_task=asyncio.create_task(ws.start())
-        if flags.pattern=="live2d": await window.page_chat.start_live2d_render()
+        ws_task = asyncio.create_task(ws.start()) 
         logger.info("✅ chat界面加载成功")
+        optimization_logger.info(f"启动耗时：{time()-start_last:.2f}")
         window.notify("chat界面加载成功")
     except Exception as e:
         logger.error( f"❌ 初始化失败:{e}")
@@ -88,9 +83,11 @@ async def async_speech_part(window):
 
     async def do_interpt():
         flags.session_id+=1
-        window.page_chat.interpt.set()
+        window.page_chat.interpt.clear()
+        llm_interpt.set()
         ap.stop()
         flags.audioplay_done.set()
+
         while not llm_que.empty(): 
             try: llm_que.get_nowait()
             except: break
@@ -108,15 +105,18 @@ async def async_speech_part(window):
             if tri==None: break
             session_id,content,images,is_search=tri
             if session_id!=flags.session_id:continue
+            if not window.page_chat.forbid_change.is_set():
+                window.page_chat.forbid_change.set()
+                window.page_chat.update_ex_btn_style()
             logger.info(f"✨:{content}")
             query_last=time()
-            message=await agent.query(query=content,images=images,is_search=is_search)
+            message,json_data=await agent.query(query=content,images=images,is_search=is_search)
             optimization_logger.info(f"记忆检索耗时:{time()-query_last:.2f}")
 
             api_last=time()
-            json_data=True if len(images)==0 else False
-            if json_data:flags.api_task=llm_api.start(message=message,interpt_event=window.page_chat.interpt,json_data=json_data)
-            else:flags.api_task=pic_llm.start(message=message,interpt_event=window.page_chat.interpt,json_data=json_data)
+            if llm_interpt.is_set():llm_interpt.clear()
+            if json_data:flags.api_task=llm_api.start(message=message,interpt_event=llm_interpt,json_data=json_data)
+            else:flags.api_task=pic_llm.start(message=message,interpt_event=llm_interpt,json_data=json_data)
             try:
                 flag=True
                 llm_res=""
@@ -124,7 +124,7 @@ async def async_speech_part(window):
                 llm_json=None
                 async for res_type,output in flags.api_task:
                     if res_type=="interpt":
-                        window.page_chat.interpt.clear()
+                        llm_interpt.clear()
                         raise
                         break
                     if res_type=="action":
@@ -157,6 +157,7 @@ async def async_speech_part(window):
                     search_message=await agent.search_skill(search_list,is_search=True)
                     if search_message: text_que.put_nowait((flags.session_id,search_message,[],True))
                     if is_search:continue
+                    window.page_chat.add_chat_item(content=llm_json.get("text",""),is_user=False)
                     await mm.add_memory(content,llm_json,date,flags.user_name)
                     await mm.add_short_memory(content,llm_res,date)
         logger.info("llm任务结束")
@@ -171,6 +172,7 @@ async def async_speech_part(window):
             elif tri is None: 
                 future_que.put_nowait(None)
                 continue
+            if timer.is_running:await timer.stop()
             session_id,response,act=tri
             if session_id!=flags.session_id or response=="..." or response.strip()=="":continue
 
@@ -195,6 +197,7 @@ async def async_speech_part(window):
                 flags.audioplay_done.set()
                 flags.last_audio_done=time()
                 continue
+            if timer.is_running:await timer.stop()
             session_id,future,act,text=tri
             if session_id != flags.session_id:
                 future.cancel()
@@ -205,10 +208,10 @@ async def async_speech_part(window):
             if session_id!=flags.session_id: continue
 
             flags.audioplayer_count+=1
-            optimization_logger.info(f"{flags.audioplayer_count}次音频播放间隔{time()-last:.2f}")
             ap.set_volume(flags.volume)
             if act:await ws.emit("expression",act)
             if text:await ws.emit("text",text)
+            optimization_logger.info(f"{flags.audioplayer_count}次音频播放间隔{time()-last:.2f}")
             await ap.play(stream,ws=ws)
             if act:await ws.emit("expression",act)
             last=time()
@@ -217,27 +220,24 @@ async def async_speech_part(window):
     async def main_event_loop():
         asr_last=time()
         interpts=[]
+        nonlocal mm, llm_api, llm_task, memory_task, api_key
         while not window.DOING.is_set():
-            nonlocal mm, llm_api, llm_task, memory_task, api_key
+            mm.user_name=flags.user_name
+            if flags.api_key!=api_key:
+                window.hide()
+                logger.info("api_key改变")
+                text_que.put_nowait(None)
+                llm_task.cancel()
+                api_key=flags.api_key
+                llm_api=async_LLM_api(api_key=api_key,log_name="llm",log_path="log/speech.log")
+                mm=RAG.MemoryManager(api_key,log_name="memory",log_path="log/memory.log",model=flags.model_name,collection_name=flags.memory_name)
+                await llm_api.warmup(window.DOING)
+                await mm.api_llm.warmup(window.DOING)
+                llm_task=asyncio.create_task(run_llm())
+                memory_task=asyncio.create_task(mm.run_add_memory())
+                window.show()
 
-            if window.page_home.user_name!=flags.user_name:
-                flags.user_name= window.page_home.user_name
-                mm.user_name=flags.user_name
-            for key,value in window.page_setting.config.items():
-                if key=="api_key" and flags.api_key!=value:
-                    window.hide()
-                    logger.info("api_key改变")
-                    text_que.put_nowait(None)
-                    llm_task.cancel()
-                    api_key=value
-                    llm_api=async_LLM_api(api_key=api_key,log_name="llm",log_path="log/speech.log")
-                    mm=RAG.MemoryManager(api_key,log_name="memory",log_path="log/memory.log",model=flags.model_name)
-                    await llm_api.warmup(window.DOING)
-                    await mm.api_llm.warmup(window.DOING)
-                    llm_task=asyncio.create_task(run_llm())
-                    memory_task=asyncio.create_task(mm.run_add_memory())
-                    window.show()
-                setattr(flags,key,value)
+            if flags.name!=mm.agent_name:await mm.switch_memory(flags)
 
             if window.stackedWidget.currentIndex()==1:
                 if window.page_chat.is_voice_mode:
@@ -275,6 +275,7 @@ async def async_speech_part(window):
                     await asyncio.sleep(0.5)
                 else:
                     if window.page_chat.wait_for_get.is_set():
+                        if timer.is_running:await timer.stop()
                         window.page_chat.wait_for_get.clear()
                         window.page_chat.forbid_change.set()
                         window.page_chat.update_ex_btn_style()
@@ -288,6 +289,7 @@ async def async_speech_part(window):
                     else: await asyncio.sleep(2)
 
                     if flags.audioplay_done.is_set():
+                        # if not timer.is_running: await timer.run()
                         window.page_chat.forbid_change.clear()
                         window.page_chat.update_ex_btn_style()
                     await asyncio.sleep(0.5)
@@ -306,6 +308,7 @@ async def async_speech_part(window):
         text_que.put_nowait(SHUTDOWN)
         await mm.add_memory_done.wait()
         ws_task.cancel()
+        timer.stop()
         # await mm.show_memories()
         kill()
         set_key("config/config.env", "API_KEY", api_key)
@@ -318,7 +321,7 @@ if __name__ == "__main__":
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
     
-    window = MyWindow()
+    window = MyWindow(flags)
     window.show()
 
     loop.create_task(async_speech_part(window))
