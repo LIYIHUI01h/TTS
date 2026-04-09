@@ -1,4 +1,5 @@
 import asyncio
+from functools import partial
 import warnings
 import httpx
 import os
@@ -138,7 +139,7 @@ class GPT_SoVITSController:
                     return self
                 raise
             except Exception as e:
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
         
         self.logger.error("❌ 模型加载超时")
         return self
@@ -389,20 +390,18 @@ async def main():
 asyncio.run(main())
 """
 
-from functools import partial
-
 class SenseVoiceController:
-    """调用SenseVoice控制器"""
+    """调用SenseVoice控制器 - 完全异步非阻塞版本"""
 
     emo_map = {
-            "<|HAPPY|>": "😊 Happy",
-            "<|SAD|>": "😔 Sad",
-            "<|ANGRY|>": "😡 Angry",
-            "<|NEUTRAL|>": "😐 Neutral",
-            "<|FEARFUL|>": "😰 Fearful",
-            "<|DISGUSTED|>": "🤢 Disgusted",
-            "<|SURPRISED|>": "😮 Surprised",
-        }
+        "<|HAPPY|>": "😊 Happy",
+        "<|SAD|>": "😔 Sad",
+        "<|ANGRY|>": "😡 Angry",
+        "<|NEUTRAL|>": "😐 Neutral",
+        "<|FEARFUL|>": "😰 Fearful",
+        "<|DISGUSTED|>": "🤢 Disgusted",
+        "<|SURPRISED|>": "😮 Surprised",
+    }
 
     tags_to_remove = {
         "<|zh|>", "<|en|>", "<|yue|>", "<|ja|>", "<|ko|>", "<|nospeech|>",
@@ -419,347 +418,298 @@ class SenseVoiceController:
                  asr_model="iic/SenseVoiceSmall",
                  vad_model="fsmn-vad",
                  sv_model="iic/speech_campplus_sv_zh-cn_16k-common",
-                 log_path=None,log_name=None):
+                 log_path=None, log_name=None):
 
-        if not log_name:log_name="SenseVoiceController"
-        self.logger=getLogger(log_name=log_name,log_path=log_path)
-        self.executor=ThreadPoolExecutor(max_workers=5)
-        self.asr_model=None
-        self.vad_model=None
-        self.sv_model=None
-        self._asr_model=asr_model
-        self._vad_model=vad_model
-        self._sv_model=sv_model
-
-        self.sample_rate=16000      # 标准采样率
-        self.chunk_size_ms=150     # 处理每批次采样点数的时间
-        self.chunk_size=int(self.chunk_size_ms*self.sample_rate/1000)
-        self.target_embedding=None
-        self.queue=asyncio.Queue()
-        self.running=False
-        self.reset()
-
-        self.interpt=False
-
-    async def load_models(self,interpt_event=None):
-        loop=asyncio.get_running_loop()
-
-        try:
-            self.asr_model=await loop.run_in_executor(
-                self.executor,
-                partial(
-                    AutoModel,
-                    model=self._asr_model,trust_remote_code=True,
-                    disable_pbar=True,disable_update=True,device="cuda:0"
-                ),
-            )
-            if interpt_event and interpt_event.is_set(): raise
-            self.vad_model=await loop.run_in_executor(
-                self.executor,
-                partial(
-                    AutoModel,
-                    model=self._vad_model,model_revision="v2.0.4",
-                    disable_pbar=True,max_end_silence=200,
-                    disable_update=True,device="cuda:0"
-                )
-            )
-            if interpt_event and interpt_event.is_set(): raise
-            self.sv_model =await loop.run_in_executor(
-                self.executor,
-                partial(
-                    AutoModel,
-                    model=self._sv_model, model_revision="v2.0.2",
-                    disable_update=True, disable_pbar=True, device="cuda:0"
-                )
-            )
-            self.logger.info("✅ 模型初始成功") 
-        except Exception as e:
-            self.logger.error("❌ 模型初始化失败")
-
-    def reset(self):
-        self.audio_buffer=np.array([],dtype=np.float32) # 音频总缓存
-        self.audio_vad=np.array([],dtype=np.float32)    # 待识别音频缓存
-        self.vad_cache={}
-        self.asr_cache={}
-        self.last_vad_beg=-1    # 上次有效识别的开始位置
-        self.last_vad_end=-1    # 上次有效识别的结尾位置
-        self.offset=0
-
-    def process_output(self,text):
-        mood="😐 Neutral"
-        for tag,emoji_label in SenseVoiceController.emo_map.items():
-            if tag in text:
-                mood=emoji_label
-                break
+        if not log_name: log_name = "SenseVoiceController"
+        self.logger = getLogger(log_name=log_name, log_path=log_path)
         
-        output=text
-        for tag in SenseVoiceController.tags_to_remove:
-            output=output.replace(tag,"")
-        output=output.strip()
-        return output,mood
-
-    async def load_temp(self,wav_path):
-        if not os.path.exists(wav_path):
-            self.logger.error(f"❌ 模板音频不存在! {os.path.abspath(wav_path)}")
-            return False
-        try:
-            loop=asyncio.get_running_loop()
-            res=await loop.run_in_executor(self.executor,partial(self.sv_model.generate,input=wav_path))
-            if 'spk_embedding' in res:
-                self.target_embedding = torch.tensor(res['spk_embedding']).to("cuda:0")
-                self.logger.info("✅ 模板音频特征已提取")
-                return True
-        except Exception as e:
-            self.logger.error(f"❌ 处理模板音频出错：{e}")
-            return False
-
-    async def asr_generate(self,audio_data,lang,use_itn=True):
-        try:
-            loop=asyncio.get_running_loop()
-            return await loop.run_in_executor(
-                self.executor,
-                partial(
-                    self.asr_model.generate,
-                    input=audio_data,cache=self.asr_cache,language=lang,
-                    use_itn=use_itn,batch_size_s=60,merge_vad=False,merge_length_s=15
-                )
-            )
-        except Exception as e:
-            self.logger.error(f"asr生成失败：{e}")
-
-    async def compare(self,audio_data):
-        if not self.target_embedding:return -1
-        try:
-            loop=asyncio.get_running_loop()
-            res= await loop.run_in_executor(self.executor,partial(self.sv_model.generate,input=audio_data))
-            if 'spk_embedding' in res:
-                current_embedding = torch.tensor(res['spk_embedding']).to("cuda:0")
-                cosine_sim = torch.nn.functional.cosine_similarity(
-                    self.target_embedding, current_embedding, dim=-1
-                )
-                return float(cosine_sim.item())
-        except Exception as e:
-            self.logger.error(f"❌ 与模板音频比较出错：{e}")
-            return 0.0
-
-    async def generate(self,audio_chunk,rate,channels,lang):
-        if len(audio_chunk) < 2: return
-        data = np.frombuffer(audio_chunk, dtype=np.int16)
-
-        if channels > 1:data = data.reshape(-1, channels).mean(axis=1).astype(np.int16)
-        target_sr = 16000
-        if rate != target_sr:
-            num_samples = int(len(data) * target_sr / rate)
-            data = np.interp(
-                np.linspace(0, len(data), num_samples, endpoint=False),
-                np.arange(len(data)),
-                data
-            ).astype(np.int16)
-
-        new_data = data.astype(np.float32) / 32767.0
-        self.audio_buffer = np.append(self.audio_buffer, new_data)
-
-        while len(self.audio_buffer)>=self.chunk_size:
-            chunk=self.audio_buffer[:self.chunk_size]
-            self.audio_buffer=self.audio_buffer[self.chunk_size:]
-            self.audio_vad=np.append(self.audio_vad,chunk)
-
-            loop=asyncio.get_running_loop()
-            vad_res=await loop.run_in_executor(
-                self.executor,
-                partial(
-                    self.vad_model.generate,
-                    input=chunk,cache=self.vad_cache,
-                    is_final=False,chunk_size=self.chunk_size_ms
-                )
-            )
-            
-            if len(vad_res[0]["value"])>0:
-                for segment in vad_res[0]["value"]:
-                    if segment[0] > -1: self.last_vad_beg = segment[0]
-                    if segment[1] > -1: self.last_vad_end = segment[1]
-
-                    if self.last_vad_beg>-1 and self.last_vad_end>-1:
-                        beg_idx = int((self.last_vad_beg - self.offset) * self.sample_rate / 1000)
-                        end_idx = int((self.last_vad_end - self.offset) * self.sample_rate / 1000)
-                        if beg_idx < 0: beg_idx = 0
-                        if end_idx > len(self.audio_vad): end_idx = len(self.audio_vad)
-                        if end_idx>beg_idx:
-                            speech_data = self.audio_vad[beg_idx:end_idx]
-                            asr_res=await self.asr_generate(speech_data,lang=lang)
-                            sv_score=await self.compare(speech_data)
-                            if asr_res:
-                                text=asr_res[0]['text']
-                                text,mood=self.process_output(text)
-                                yield text,mood,sv_score
-                        self.audio_vad=self.audio_vad[end_idx:]
-                        self.offset+=(self.last_vad_end - self.offset)
-                        self.last_vad_beg = -1
-                        self.last_vad_end = -1
-    
-    async def _start(self,lang,temp=None, threshold=0.35,include_mood=True,mode="out",window=None):
-        # await self.load_models()
-        if mode=="in": import pyaudiowpatch as pa_module
-        else: import pyaudio as pa_module
-        pyaudio=pa_module
-
-        self.target_embedding = None
-        if mode == "out" and temp: await self.load_temp(temp)
-        if not self.target_embedding: self.logger.info("无模板音频模式...")
-
-        p = pyaudio.PyAudio()
-        FORMAT = pyaudio.paInt16
-        CHUNK = 4800
-        CHANNELS = None
-        RATE = None
-        stream = None
-
-        try:
-            if mode == "out":
-                self.logger.info("🎤 开始录音(外部声源)...")
-                try:
-                    default_input = p.get_default_input_device_info()
-                    CHANNELS = int(default_input["maxInputChannels"]) 
-                    RATE = 16000 
-                except:
-                    CHANNELS = 1
-                    RATE = 16000
-
-                stream = p.open(
-                    format=FORMAT,
-                    channels=CHANNELS,
-                    rate=RATE,
-                    input=True,
-                    frames_per_buffer=CHUNK
-                )
-            elif mode == "in":
-                try:
-                    wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
-                    default_speakers = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
-                    
-                    if not default_speakers["isLoopbackDevice"]:
-                        for loopback in p.get_loopback_device_info_generator():
-                            if default_speakers["name"] in loopback["name"]:
-                                device_info = loopback
-                                break
-                        else:
-                            device_info = p.get_default_wasapi_loopback_system_device()
-                    else:
-                        device_info = default_speakers
-                except (AttributeError, OSError):
-                    self.logger.error("❌ 无法获取内录设备。请确保已安装 pyaudiowpatch 且电脑正在播放声音。")
-                    return
-                self.logger.info(f"🎤 开始录音(内部声源): {device_info['name']}")
-                
-                RATE = int(device_info["defaultSampleRate"])
-                CHANNELS = device_info["maxInputChannels"]
-                
-                stream = p.open(
-                    format=FORMAT,
-                    channels=CHANNELS,
-                    rate=RATE,
-                    input=True,
-                    input_device_index=device_info["index"],
-                    frames_per_buffer=CHUNK
-                )
-            else:
-                self.logger.error(f"无当前录音模式{mode}")
-                return
-
-            while self.running:
-                if window and window.page_chat.interpt:
-                    self.runnning=False
-                    self.interpt=True
-                    break
-                loop=asyncio.get_running_loop()
-                data =await loop.run_in_executor(
-                    self.executor,
-                    partial(
-                        stream.read,
-                        CHUNK, exception_on_overflow=False
-                    )
-                )
-                async for text, mood, score in self.generate(data, RATE, CHANNELS,lang=lang):
-                    if window and window.page_chat.interpt:break
-                    if self.target_embedding and score < threshold: continue
-                    output = ""
-                    if include_mood: output += f"|{mood}|"
-                    output += text
-                    await self.queue.put(output)
-                    
-        except Exception as e:
-            self.logger.error(f"❌ 录音/处理时发生错误：{e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            self.logger.info("🛑 停止录音流...")
-            if stream:
-                if stream.is_active(): stream.stop_stream()
-                stream.close()
-            p.terminate()
-            self.reset()
-            while not self.queue.empty():
-                try:
-                    self.queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-            self.queue.put_nowait(None)
-
-    async def start(self,lang="auto",temp=None,threshold=0.35,include_mood=True,mode="out",window=None):
-        while not self.queue.empty(): await asyncio.sleep(0.2)
-        self.running=True
-        # asyncio.create_task(self.monitor())
-        self.main_task=asyncio.create_task(self._start(lang,temp,threshold,include_mood,mode,window))
-        
-        return self._get()
-
-    async def _get(self):
-        while True:
-            if not self.running: await asyncio.sleep(0.2)
-            output=await self.queue.get()
-            if output is None:break
-            yield output
-
-    async def monitor(self, stop_key=']'):
-        from pynput import keyboard
-        loop=asyncio.get_running_loop()
-        stop_event=asyncio.Event()
-
-        def on_press(key):
-            try:
-                k = key.char if hasattr(key, 'char') else key.name
-                if k == stop_key:
-                    loop.call_soon_threadsafe(self.stop)
-                    loop.call_soon_threadsafe(stop_event.set)
-                    return False  
-            except Exception:
-                pass
-
-        listener = keyboard.Listener(on_press=on_press)
-        listener.start()
-        
-        await stop_event.wait()
-
-    def stop(self):
-        if not self.running:return
-        self.logger.info("停止语音读取")
-        self.running=False
-
-    def release(self):
-        self.running = False
+        self.executor = ThreadPoolExecutor(max_workers=5)
         
         self.asr_model = None
         self.vad_model = None
         self.sv_model = None
+        self._asr_model = asr_model
+        self._vad_model = vad_model
+        self._sv_model = sv_model
+        
+        self.wait_for_get = asyncio.Event()
+        self.text = ""
+
+        self.sample_rate = 16000      
+        self.chunk_size_ms = 150     
+        self.chunk_size = int(self.chunk_size_ms * self.sample_rate / 1000)
         self.target_embedding = None
-        self.executor.shutdown(wait=False)
+        self.queue = asyncio.Queue()
+        self.running = False
+        
         self.reset()
 
-        while not self.queue.empty():
-            try:
-                self.queue.get_nowait()
-            except asyncio.QueueEmpty:
+    def reset(self):
+        """重置音频缓存和状态"""
+        self.audio_buffer = np.array([], dtype=np.float32) 
+        self.audio_vad = np.array([], dtype=np.float32)    
+        self.vad_cache = {}
+        self.asr_cache = {}
+        self.last_vad_beg = -1 
+        self.last_vad_end = -1 
+        self.offset = 0
+
+    async def load_models(self, interpt_event=None):
+        """异步加载模型"""
+        loop = asyncio.get_running_loop()
+        try:
+            self.asr_model = await loop.run_in_executor(self.executor, partial(
+                AutoModel, model=self._asr_model, trust_remote_code=True,
+                disable_pbar=True, disable_update=True, device="cuda:0"
+            ))
+            self.vad_model = await loop.run_in_executor(self.executor, partial(
+                AutoModel, model=self._vad_model, model_revision="v2.0.4",
+                disable_pbar=True, max_end_silence=200, disable_update=True, device="cuda:0"
+            ))
+            self.sv_model = await loop.run_in_executor(self.executor, partial(
+                AutoModel, model=self._sv_model, model_revision="v2.0.2",
+                disable_update=True, disable_pbar=True, device="cuda:0"
+            ))
+            print("✅ 语音模型初始化成功")
+        except Exception as e:
+            print(f"❌ 模型初始化失败: {e}")
+
+    def process_output(self, text):
+        """清洗文本标签"""
+        mood = "😐 Neutral"
+        for tag, emoji_label in self.emo_map.items():
+            if tag in text:
+                mood = emoji_label
                 break
+        
+        output = text
+        for tag in self.tags_to_remove:
+            output = output.replace(tag, "")
+        return output.strip(), mood
+
+    async def load_temp(self, wav_path):
+        """提取声纹模板特征"""
+        if not os.path.exists(wav_path): return False
+        try:
+            loop = asyncio.get_running_loop()
+            res = await loop.run_in_executor(self.executor, partial(self.sv_model.generate, input=wav_path))
+            if 'spk_embedding' in res:
+                self.target_embedding = torch.tensor(res['spk_embedding']).to("cuda:0")
+                return True
+        except Exception:
+            return False
+
+    async def _process_audio_loop(self, rate, channels, lang, threshold, include_mood):
+        loop = asyncio.get_running_loop()
+        while self.running:
+            audio_chunk = await self.queue.get()
+            if audio_chunk is None: 
+                self.queue.task_done()
+                break
+
+            results = await loop.run_in_executor(
+                self.executor,
+                self._sync_identify_logic,
+                audio_chunk, rate, channels, lang, threshold
+            )
+
+            if results:
+                for text, mood, score in results:
+                    output = f"|{mood}|{text}" if include_mood else text
+                    self.text = output
+                    self.wait_for_get.set()
+            
+            self.queue.task_done()
+
+    def _sync_identify_logic(self, audio_chunk, rate, channels, lang, threshold):
+        try:
+            data = np.frombuffer(audio_chunk, dtype=np.int16)
+            if channels > 1:
+                data = data.reshape(-1, channels).mean(axis=1).astype(np.int16)
+            
+            if rate != self.sample_rate:
+                num_samples = int(len(data) * self.sample_rate / rate)
+                data = np.interp(
+                    np.linspace(0, len(data), num_samples, endpoint=False),
+                    np.arange(len(data)), data
+                ).astype(np.int16)
+
+            new_data = data.astype(np.float32) / 32767.0
+            self.audio_buffer = np.append(self.audio_buffer, new_data)
+
+            results_batch = []
+
+            while len(self.audio_buffer) >= self.chunk_size:
+                chunk = self.audio_buffer[:self.chunk_size]
+                self.audio_buffer = self.audio_buffer[self.chunk_size:]
+                self.audio_vad = np.append(self.audio_vad, chunk)
+
+                vad_res = self.vad_model.generate(
+                    input=chunk, cache=self.vad_cache,
+                    is_final=False, chunk_size=self.chunk_size_ms
+                )
+
+                if len(vad_res[0]["value"]) > 0:
+                    for segment in vad_res[0]["value"]:
+                        if segment[0] > -1: self.last_vad_beg = segment[0]
+                        if segment[1] > -1: self.last_vad_end = segment[1]
+
+                        if self.last_vad_beg > -1 and self.last_vad_end > -1:
+                            beg_idx = int((self.last_vad_beg - self.offset) * self.sample_rate / 1000)
+                            end_idx = int((self.last_vad_end - self.offset) * self.sample_rate / 1000)
+                            
+                            if end_idx > beg_idx:
+                                speech_data = self.audio_vad[beg_idx:end_idx]
+                                
+                                asr_res = self.asr_model.generate(
+                                    input=speech_data, cache=self.asr_cache, language=lang,
+                                    use_itn=True, batch_size_s=60, merge_vad=False
+                                )
+                                
+                                score = self._sync_compare(speech_data)
+
+                                if asr_res and (not self.target_embedding or score >= threshold):
+                                    raw_text = asr_res[0]['text']
+                                    clean_text, mood = self.process_output(raw_text)
+                                    results_batch.append((clean_text, mood, score))
+
+                            self.audio_vad = self.audio_vad[end_idx:]
+                            self.offset += (self.last_vad_end - self.offset)
+                            self.last_vad_beg = -1
+                            self.last_vad_end = -1
+            
+            return results_batch
+        except Exception:
+            return None
+
+    def _sync_compare(self, audio_data):
+        """同步声纹比对，由线程池内部调用"""
+        if self.target_embedding is None: return 1.0
+        try:
+            res = self.sv_model.generate(input=audio_data)
+            if 'spk_embedding' in res: 
+                curr_emb = torch.tensor(res['spk_embedding']).to("cuda:0")
+                sim = torch.nn.functional.cosine_similarity(self.target_embedding, curr_emb, dim=-1)
+                return float(sim.item())
+        except:
+            return 0.0
+        return 0.0
+
+    async def start(self, lang="auto", temp=None, threshold=0.35, include_mood=True, mode="out", window=None):
+        rate = 16000
+        channels = 1
+        stream = None
+        p = None
+        loop = asyncio.get_running_loop()
+
+        if mode == "in":
+            try:
+                import pyaudiowpatch as pa_module
+            except ImportError:
+                self.logger.error("未安装 pyaudiowpatch")
+                return
+        else:
+            import pyaudio as pa_module
+
+        self.running = True
+
+        try:
+            if mode == "out" and temp:
+                await self.load_temp(temp)
+
+            p = await loop.run_in_executor(self.executor, pa_module.PyAudio)
+
+            if mode == "out":
+                dev = await loop.run_in_executor(self.executor, p.get_default_input_device_info)
+                channels = int(dev["maxInputChannels"])
+                rate = 16000 
+
+                stream = await loop.run_in_executor(
+                    self.executor,
+                    lambda: p.open(format=pa_module.paInt16, channels=channels, rate=rate, input=True, frames_per_buffer=4800)
+                )
+            else:
+                wasapi_info = await loop.run_in_executor(self.executor, p.get_host_api_info_by_type, pa_module.paWASAPI)
+                default_speakers = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
+
+                if not default_speakers["isLoopbackDevice"]:
+                    for loopback in p.get_loopback_device_info_generator():
+                        if default_speakers["name"] in loopback["name"]:
+                            device_info = loopback
+                            break
+                    else:
+                        device_info = p.get_default_wasapi_loopback_system_device()
+                else:
+                    device_info = default_speakers
+
+                rate = int(device_info["defaultSampleRate"])
+                channels = device_info["maxInputChannels"]
+
+                stream = await loop.run_in_executor(
+                    self.executor,
+                    lambda: p.open(
+                        format=pa_module.paInt16,
+                        channels=channels,
+                        rate=rate,
+                        input=True,
+                        input_device_index=device_info["index"],
+                        frames_per_buffer=4800
+                    )
+                )
+
+            process_task = asyncio.create_task(self._process_audio_loop(rate, channels, lang, threshold, include_mood))
+            self.logger.info(f"🎤 语音识别功能已就绪： (Mode: {mode}, Rate: {rate}, Channels: {channels})")
+
+            while self.running:
+                if window and not window.page_chat.is_voice_mode:
+                    break
+                
+                data = await loop.run_in_executor(
+                    self.executor, 
+                    partial(stream.read, 4800, exception_on_overflow=False)
+                )
+                await self.queue.put(data)
+
+            await self.queue.put(None)
+            await process_task
+
+        except Exception as e:
+            self.logger.error(f"❌ ASR 运行异常: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            self.running = False
+            if stream:
+                try:
+                    await loop.run_in_executor(self.executor, stream.stop_stream)
+                    await loop.run_in_executor(self.executor, stream.close)
+                except: pass
+            if 'process_task' in locals() and not process_task.done():
+                try:
+                    await self.queue.put(None)
+                    await asyncio.wait_for(process_task, timeout=1.0)
+                except (asyncio.TimeoutError, Exception):
+                    process_task.cancel()
+                    try:
+                        await process_task
+                    except asyncio.CancelledError:
+                        pass 
+
+            if p:
+                try:
+                    await loop.run_in_executor(self.executor, p.terminate)
+                except: pass
+            self.reset()
+            
+    async def stop(self):
+        if not self.running:
+            return
+        self.logger.info("正在停止语音识别服务...")
+        self.running = False
+        
+        await self.queue.put(None)
+        self.wait_for_get.clear()
+        self.logger.info("✅ 语音识别服务已停止")
 
 import asyncio
 import base64
@@ -768,80 +718,91 @@ import io
 import wave
 import numpy as np
 import dashscope
+from concurrent.futures import ThreadPoolExecutor 
 from dashscope.audio.qwen_tts import SpeechSynthesizer
 
 class QwenTTSController:
     def __init__(self, json_path, log_path="log/speech.log", log_name=None, inference_log_path=None, base_path="GPT-SoVITS"):
         self.log_path = log_path
         if log_name is None: log_name = "QwenTTSController"
-        self.logger = getLogger(log_path=log_path, log_name=log_name, mode='w')
         
         self.api_key = "sk-ed9d05dbcfa64e319d51c78864a77c70" 
         dashscope.api_key = self.api_key
         self.voice = "Cherry"
         self.model = "qwen-tts"
+        
+        self.executor = ThreadPoolExecutor(max_workers=5)
 
     async def start_service(self, window):
-        self.logger.info("正在初始化 Qwen-TTS 服务...")
+        print("正在初始化 Qwen-TTS 服务...")
         await self.generate_tts("验证", is_warmup=True)
         return self
 
-    def _sync_streaming_call(self, text):
-        return SpeechSynthesizer.call(
-            model=self.model,
-            api_key=self.api_key,
-            text=text,
-            voice=self.voice,
-            format='pcm', 
-            sample_rate=24000, 
-            stream=True
-        )
-
-    async def generate_tts(self, text, text_lang="auto", is_warmup=False):
-        t0 = time.time()
-        pcm_data = b""
+    def _sync_process_task(self, text):
         try:
-            loop = asyncio.get_event_loop()
-            responses = await loop.run_in_executor(None, self._sync_streaming_call, text)
+            pcm_data = b""
+            responses = SpeechSynthesizer.call(
+                model=self.model,
+                api_key=self.api_key,
+                text=text,
+                voice=self.voice,
+                format='pcm', 
+                sample_rate=24000, 
+                stream=True
+            )
 
             for chunk in responses:
                 if chunk.status_code == 200:
-                    output = getattr(chunk, 'output', {})
-                    audio_payload = output.get('audio', {}).get('data')
+                    audio_payload = chunk.output.get('audio', {}).get('data')
                     if audio_payload:
                         pcm_data += base64.b64decode(audio_payload)
+                else:
+                    return None
 
-            if pcm_data:
-                audio_np = np.frombuffer(pcm_data, dtype=np.int16)
-                
-                target_rate = 32000
-                source_rate = 24000
-                num_samples = int(len(audio_np) * target_rate / source_rate)
-                
-                resampled_audio = np.interp(
-                    np.linspace(0, len(audio_np), num_samples, endpoint=False),
-                    np.arange(len(audio_np)),
-                    audio_np
-                ).astype(np.int16)
+            if not pcm_data:
+                return None
 
-                with io.BytesIO() as wav_buffer:
-                    with wave.open(wav_buffer, 'wb') as wav_file:
-                        wav_file.setnchannels(1)
-                        wav_file.setsampwidth(2)
-                        wav_file.setframerate(target_rate)
-                        wav_file.writeframes(resampled_audio.tobytes())
-                    
-                    full_wav_bytes = wav_buffer.getvalue()
+            audio_np = np.frombuffer(pcm_data, dtype=np.int16)
+            target_rate, source_rate = 32000, 24000
+            num_samples = int(len(audio_np) * target_rate / source_rate)
 
-                if not is_warmup:
-                    self.logger.info(f"✅ 合成并校频成功 | 耗时: {time.time()-t0:.2f}s")
-                
-                return full_wav_bytes
+            resampled_audio = np.interp(
+                np.linspace(0, len(audio_np), num_samples, endpoint=False),
+                np.arange(len(audio_np)),
+                audio_np
+            ).astype(np.int16)
+
+            with io.BytesIO() as wav_buffer:
+                with wave.open(wav_buffer, 'wb') as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(target_rate)
+                    wav_file.writeframes(resampled_audio.tobytes())
+                return wav_buffer.getvalue()
+        except Exception as e:
+            print(f"Sync process error: {e}")
             return None
 
+    async def generate_tts(self, text, text_lang="auto", is_warmup=False):
+        t0 = time.time()
+        try:
+            loop = asyncio.get_running_loop()
+            
+            full_wav_bytes = await loop.run_in_executor(
+                self.executor, 
+                self._sync_process_task, 
+                text
+            )
+
+            if full_wav_bytes and not is_warmup:
+                print(f"✅ 合成成功 | 总耗时: {time.time()-t0:.2f}s")
+
+            return full_wav_bytes
+
         except Exception as e:
-            self.logger.exception(f"Qwen-TTS 异常: {repr(e)}")
+            print(f"Qwen-TTS 异常: {repr(e)}")
             return None
 
     async def release(self):
-        self.logger.info("Qwen-TTS 资源已释放")
+        self.executor.shutdown(wait=True)
+        print("Qwen-TTS 资源已释放")

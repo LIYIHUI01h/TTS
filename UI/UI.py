@@ -1082,8 +1082,8 @@ class ChatPage(QWidget):
         if self.is_voice_mode and not self.asr_prepare.is_set():return
 
         icon = "⌨️" if self.is_voice_mode else "🎤"
-        self.mode_btn.setText(icon)
-        self.mode_btn.setStyleSheet("background: #3e4451; color: white; border-radius: 6px; border: none;")
+        self.btn_mode.setText(icon)
+        self.btn_mode.setStyleSheet("background: #3e4451; color: white; border-radius: 6px; border: none;")
 
     def update_ex_btn_style(self):
         if self.forbid_change.is_set():
@@ -1094,6 +1094,7 @@ class ChatPage(QWidget):
             self.toggle_ex_btn.setStyleSheet("QPushButton { background: #3e4451; color: white; border-radius: 18px; border: 1px solid #565f73; font-size: 20px; } QPushButton:hover { background: #4e5565; border-color: #87CEFA; }")
 
     def on_ex_btn_clicked(self):
+        print(self.forbid_change.is_set(),self.interpt.is_set())
         if self.forbid_change.is_set():
             self.interpt.set()
             self.notify("操作已中止", "warn")
@@ -1204,13 +1205,14 @@ class ChatPage(QWidget):
             self.interpt.set()
         
         self.is_voice_mode = not self.is_voice_mode
-        if hasattr(self, 'asr_prepare'): await self.asr_prepare.wait()
-        await self._update_ui_state()
+        if not self.asr_prepare.is_set(): await self.asr_prepare.wait()
+        self.update_ui_state()
         
         if self.is_voice_mode:
             self.chat_input.setReadOnly(True); self.chat_input.setPlainText("语音识别模式: 准备就绪，请说话...")
             self.chat_input.setStyleSheet(self.chat_input.styleSheet().replace("color: white;", "color: #87CEFA;"))
         else:
+            self.interpt.set()
             self.chat_input.setReadOnly(False); self.chat_input.clear()
             self.chat_input.setStyleSheet(self.chat_input.styleSheet().replace("color: #87CEFA;", "color: white;"))
 

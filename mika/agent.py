@@ -183,7 +183,7 @@ class BaseSkills:
                     return base64.b64encode(buffer.getvalue()).decode()
             img_base64 = await loop.run_in_executor(None, _capture_and_encode)
             return [{
-                "role": "system", 
+                "role": "user", 
                 "content": [
                     {
                         "type": "text", 
@@ -238,12 +238,15 @@ class InteractionAgentController(BaseSkills):
         if images :message=[{"role":"system","content":self.VL_SYSTEM_PROMPT+current_time_info}]
         else:message=[{"role":"system","content":self.SYSTEM_PROMPT+current_time_info}]
 
+        json_data=(len(images)==0)
         tasks = []
         for task in call_back:
             for key,value in task.items():
                 if key=="search" and value: tasks.append(self.search_skill(value))
                 elif key=="weather" and value:tasks.append(self.weather_skill(value))
-                elif key=="digital_vision" and value:tasks.append(self.digital_vision_skill())
+                elif key=="digital_vision" and value:
+                    json_data=False
+                    tasks.append(self.digital_vision_skill())
                 # elif key=="think" and value:
 
         if tasks:
@@ -256,8 +259,6 @@ class InteractionAgentController(BaseSkills):
             return message,True
         elif not call_back:current_text = f"[{self.mm.user_name}]：{query}"
         else:current_text = f"{query}"
-
-        json_data=(len(images)==0)
 
         for ques,res,date in list(self.mm.short_memory_que._queue):
             message.extend([{"role":"user","content":ques},{"role":"assistant","content":res}])

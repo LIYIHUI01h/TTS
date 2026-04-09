@@ -29,6 +29,7 @@ class GlobalVar:
         self.audioplay_done=asyncio.Event()
         self.session_id=0
         self.api_task=None
+        self.asr_task=None
         self.last_audio_done=time()
         self.user_name="游客"
         self.tts_path="models/v2pp/mmk/tmp.json"
@@ -36,6 +37,7 @@ class GlobalVar:
         for key,value in new_config.items():
             setattr(self,key,value)
 
+asr_load_done=False
 flags=GlobalVar()
 llm_interpt=asyncio.Event()
 async def async_speech_part(window):
@@ -84,17 +86,20 @@ async def async_speech_part(window):
 
     async def do_interpt():
         flags.session_id+=1
+        window.page_chat.forbid_change.clear()
+        window.page_chat.update_ex_btn_style()
         window.page_chat.interpt.clear()
-        llm_interpt.set()
-        ap.stop()
-        flags.audioplay_done.set()
-
         while not llm_que.empty(): 
             try: llm_que.get_nowait()
             except: break
         while not future_que.empty(): 
             try: future_que.get_nowait() 
             except: break
+            
+        llm_interpt.set()
+        ap.stop()
+        flags.audioplay_done.set()
+
         asyncio.sleep(1)
 
     async def run_llm():
@@ -226,7 +231,7 @@ async def async_speech_part(window):
 
     async def main_event_loop():
         asr_last=time()
-        interpts=[]
+        interpts=[""]
         nonlocal mm, ia, llm_task, memory_task, api_key
         while not window.DOING.is_set():
             mm.user_name=flags.user_name
@@ -246,38 +251,48 @@ async def async_speech_part(window):
                 tasks=[mm.switch_memory(flags),ia.load_prompt(flags.prompt_path),ta.load_prompt(flags.prompt_path)]
                 await asyncio.gather(*tasks)
                 logger.info("✅ 智能体切换成功!!!")
-
+            global asr_load_done
             if window.stackedWidget.currentIndex()==1:
                 if window.page_chat.is_voice_mode:
-                    if not window.page_chat.asr_prepare.is_set(): 
+                    if not window.page_chat.asr_prepare.is_set() and not asr_load_done: 
                         window.notify("语音识别模型加载中请稍等...")
-                        await asr.load_models(window.DOING),
+                        asr_load_done = True
+                        await asr.load_models(window.DOING)
                         window.notify("语音识别模型加载完成")
                         window.page_chat.asr_prepare.set()
-                    window.page_chat.forbid_change.set()
-                    window.page_chat.update_ex_btn_style()
-                    asr_task=await asr.start(mode=flags.asr_mode,window=window)
-                    async for text in asr_task:
-                        if asr_last:
-                            optimization_logger.info(f"asr首次响应耗时{time()-asr_last:.2f}")
-                            asr_last=None
-                        if not flags.audioplay_done.is_set():print("当前对话还未结束，无法处理当前语音")
 
-                        if flags.audioplay_done.is_set():
-                            if time()-flags.last_audio_done < flags.silence_threshold: continue
-                            else: 
-                                logger.info(text)
-                            flags.session_id+=1
-                            logger.info(f"会话{flags.session_id}开始")
-                            text_que.put_nowait((flags.session_id,text,[],[]))
-                            flags.audioplay_done.clear()
+                    if not flags.asr_task and flags.audioplay_done.is_set() and not window.page_chat.forbid_change.is_set():
+                        logger.info("语音识别模式: 准备就绪，请说话...")
+                        window.page_chat.chat_input.setPlainText("语音识别模式: 准备就绪，请说话...")
+                        flags.asr_task = asyncio.create_task(asr.start(mode=flags.asr_mode, window=window))
 
-                        elif any(word in text for word in interpts):await do_interpt()
-                        if flags.audioplay_done.is_set: window.page_chat.chat_input.setPlainText("语音识别模式(']'键退出): 准备就绪，请说话...")
+                    if asr.wait_for_get.is_set():
+                        if timer.is_running: await timer.stop()
+                        asr.wait_for_get.clear() 
+                        window.page_chat.forbid_change.set()
+                        window.page_chat.update_ex_btn_style()
+                        text = asr.text
+                        asr.text = "" 
+                        flags.session_id += 1
+                        logger.info(f"会话 {flags.session_id} 开始: {text}")
+                        window.page_chat.add_chat_item(text)
+                        text_que.put_nowait((flags.session_id, text, [], []))
+                        flags.audioplay_done.clear()
+                        if flags.asr_task:
+                            asr.stop()
+                            flags.asr_task.cancel()
+                            flags.asr_task = None
 
-                    if asr.interpt: asr.interpt=False
+                    if window.page_chat.interpt.is_set():
+                        await do_interpt()
+                        if flags.asr_task:
+                            asr.stop()
+                            flags.asr_task.cancel()
+                            flags.asr_task = None
 
                     if flags.audioplay_done.is_set():
+                        if not timer.is_running: await timer.run()
+                        print(window.page_chat.forbid_change.is_set())
                         window.page_chat.forbid_change.clear()
                         window.page_chat.update_ex_btn_style()
                     await asyncio.sleep(0.5)
@@ -294,7 +309,7 @@ async def async_speech_part(window):
                         text_que.put_nowait((flags.session_id,text,images,[]))
                         flags.audioplay_done.clear()
                     elif window.page_chat.interpt.is_set():await do_interpt()
-                    else: await asyncio.sleep(2)
+                    else: await asyncio.sleep(1)
 
                     if flags.audioplay_done.is_set():
                         if not timer.is_running: await timer.run()

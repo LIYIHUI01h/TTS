@@ -77,7 +77,7 @@ class IdleController:
                     
                     return base64.b64encode(buffer.getvalue()).decode()
             img_base64 = await loop.run_in_executor(None, _capture_and_encode)
-            self.text_que.put_nowait((self.flags.session_id,f"【idle lock】闲置你挺久了,你已经截取了其鼠标指向的实时屏幕画面：{source_name}。根据以上信息主动找用户聊天吧！",[img_base64],False))
+            self.text_que.put_nowait((self.flags.session_id,f"【idle lock】闲置你挺久了,你已经截取了其鼠标指向的实时屏幕画面：{source_name}。根据以上信息主动找用户聊天吧！",[img_base64],[]))
             await self.reset()
         except Exception as e:
             print(f"screen定时任务出错:{e}")
