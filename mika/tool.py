@@ -25,6 +25,9 @@ def getLogger(level=logging.INFO,mode='a',log_path=None,log_name=None,stream=Tru
     """返回对应的日志实例"""
     logger=logging.getLogger(str(log_name))
     logger.propagate = False
+
+    if logger.handlers:return logger
+
     if not logger.handlers:
         logger.setLevel(level)
         formatter = logging.Formatter(
@@ -107,11 +110,11 @@ class AsyncRandomTimer:
             print(e)
             pass
         
-    def reset(self):
+    async def reset(self):
         if self._task:self._task.cancel()
         self._task=asyncio.create_task(self.run_timer())
 
-    def stop(self):
+    async def stop(self):
         if self._task:
             self._task.cancel()
         

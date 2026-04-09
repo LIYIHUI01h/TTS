@@ -138,7 +138,7 @@ class GPT_SoVITSController:
                     return self
                 raise
             except Exception as e:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1)
         
         self.logger.error("❌ 模型加载超时")
         return self

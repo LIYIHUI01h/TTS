@@ -90,9 +90,9 @@ class IdleController:
 
     async def reset(self):
         for timer in self.timers:
-            timer.reset()
+            await timer.reset()
 
     async def stop(self):
-        self.is_running=False
         for timer in self.timers:
-            timer.stop()
+            await timer.stop()
+        self.is_running=False

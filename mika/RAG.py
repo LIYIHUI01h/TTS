@@ -44,7 +44,7 @@ class MyEmbedding(BaseEmbedding):
         return []
 
 class MemoryManager:
-    def __init__(self, api_key, short_memory_size=5, top_k=50, top_n=5, 
+    def __init__(self, api_key, short_memory_size=15, top_k=50, top_n=5, 
                  add_insert_num=3, split_insert_num=2, user_name="璃依回", 
                  agent_name="null", collection_name="QianYi_memories", 
                  log_path="log/memory.log", log_name="memory_llm", 
@@ -132,7 +132,7 @@ class MemoryManager:
         prompt_path=flags.prompt_path
         self.logger.info(f"🔄 正在从 {self.collection_name} 切换到 {new_collection_name}...")
         
-        await self.load_prompt(prompt_path)
+        # await self.load_prompt(prompt_path)
         self._save_memory_at_exit()
 
         self.agent_name = new_agent_name
@@ -305,7 +305,7 @@ class MemoryManager:
             """
         
         self.logger.info("查询提炼开始...")
-        json_data=await self.small_api_llm.start_nostream(message=[{"role":"system","content":prompt},{"role":"user","content":f"当前提问：{query}"}])
+        json_data=await self.api_llm.start_nostream(message=[{"role":"system","content":prompt},{"role":"user","content":f"当前提问：{query}"}])
         self.logger.info(f"查询提炼:{query}->{json_data}")
         return json_data
 
@@ -362,7 +362,7 @@ class MemoryManager:
             """
         
         self.logger.info("QA提炼开始...")
-        data=await self.small_api_llm.start_nostream_json(message=[{"role":"system","content":prompt}])
+        data=await self.api_llm.start_nostream_json(message=[{"role":"system","content":prompt}])
         self.last_QA_summary=data
         self.logger.info(f"对话提炼:{content}->{data}")
         return data
@@ -443,11 +443,12 @@ class MemoryManager:
                 best_nodes.append(node)
         return best_nodes
     
-    async def query(self,query,images=[],query_score_threshold=0.6,show_message=False,do_query_split=True,is_search=False,user_query=True):
+    async def query(self,query,images=[],query_score_threshold=0.6,show_message=False,do_query_split=True):
         self.logger.info("记忆检索开始...")
-        # print(type(query),query)
+
+        print(type(query),query)
         ttt=0
-        if do_query_split and not is_search:
+        if do_query_split:
             t_query = query.replace("我", "{U}").replace("你", "{A}")
             tmp_query = t_query.replace("{U}", self.user_name).replace("{A}", self.agent_name)
             while True:
@@ -470,12 +471,11 @@ class MemoryManager:
 
         if isinstance(new_query, str):new_query = [new_query]
         
-        # current_time_info = f"\n当前时间：[{datetime.now().strftime('%Y-%m-%d %H:%M:%S %A')}]"
-        # message=[{"role":"system","content":self.SYSTEM_PROMPT+current_time_info}]
+        current_time_info = f"\n当前时间：[{datetime.now().strftime('%Y-%m-%d %H:%M:%S %A')}]"
         message=[]
         filter_list = []
 
-        if need_memory and not is_search:
+        if need_memory:
             mtp=MultiTimeParser()
             time_infos=mtp.parse(query)
             s_ts,e_ts=[],[]
@@ -554,26 +554,6 @@ class MemoryManager:
                 self.logger.info(memory_text+'\n'+short_memory)
                 message.append({"role":"system","content":memory_text+'\n'+short_memory})
         
-        for ques,res,date in list(self.short_memory_que._queue):
-            message.extend([{"role":"user","content":ques},{"role":"assistant","content":res}])
-
-        if user_query:current_text = f"[{self.user_name}]：{query}"
-        else: current_text = f"[{self.user_name}{query}]"
-
-        if not images:
-            message.append({"role": "user", "content": current_text})
-        else:
-            content_list = [{"type": "text", "text": "这些是用户上传的图片"}]
-            for img in images:
-                content_list.append({
-                    "type": "image_url", 
-                    "image_url": {"url": f"data:image/jpeg;base64,{img}"}
-                })
-            message.append({"role": "user", "content": content_list})
-            message.append({"role": "user", "content": current_text})
-
-        if show_message:
-            self.logger.info(f"api传入提示词:{message}")
         return message
 
     async def add_short_memory(self,ques,res,date):

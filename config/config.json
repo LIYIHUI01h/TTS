@@ -8,7 +8,7 @@
     "volume": 0.4,
     "name": "浅宜",
     "model_path": "models/QianYi/QianYi.model3.json",
-    "prompt_path": "live2d/public/models/QianYi",
+    "prompt_path": "live2d/public/models/QianYi/prompt",
     "tts_path": "models/v2pp/mmk/tmp.json",
     "memory_name": "QianYi_memories",
     "mouthparam": "ParamMouthOpenY",

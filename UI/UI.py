@@ -1,13 +1,12 @@
 import os
-import os
 import sys
-os.environ["QT_PA_PLATFORM"] = "windows:dpiawareness=0"
-os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--enable-gpu --num-raster-threads=4"
-import ctypes
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(0)
-except Exception:
-    pass
+# os.environ["QT_PA_PLATFORM"] = "windows:dpiawareness=0"
+# os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--enable-gpu --num-raster-threads=4"
+# import ctypes
+# try:
+#     ctypes.windll.shcore.SetProcessDpiAwareness(0)
+# except Exception:
+#     pass
 import base64
 import http
 import math
@@ -945,11 +944,15 @@ class ChatPage(QWidget):
         if not hasattr(self, 'history_layout') or self.history_layout is None:
             self.init_history_view()
 
-        bubble = QFrame()
-        bubble.setObjectName("chat_bubble")
-        bubble_layout = QHBoxLayout(bubble)
-        bubble_layout.setContentsMargins(0, 5, 0, 5)
-        bubble_layout.setSpacing(10)
+        bubble_row = QWidget()
+        bubble_row.setStyleSheet("background: transparent;")
+
+        row_layout = QHBoxLayout(bubble_row)
+        row_layout.setContentsMargins(10, 5, 10, 5)
+        row_layout.setSpacing(0) 
+
+        area_w = self.history_area.width()
+        limit_width = int((area_w if area_w > 100 else 500) * 0.7)
 
         display_widget = None
         pixmap = QPixmap()
@@ -962,7 +965,7 @@ class ChatPage(QWidget):
                 if pixmap.loadFromData(img_bytes):
                     is_image_success = True
             except Exception as e:
-                logger.info(f"图片解码失败: {e}")
+                if hasattr(self, 'logger'): self.logger.info(f"图片解码失败: {e}")
 
         if not is_image_success:
             if isinstance(content, (QPixmap, QImage)):
@@ -973,13 +976,9 @@ class ChatPage(QWidget):
                     pixmap = QPixmap(content)
                     is_image_success = not pixmap.isNull()
 
-        area_w = self.history_area.viewport().width() 
-        current_width = area_w if area_w > 100 else 400 
-
         if is_image_success:
             display_widget = QLabel()
-            max_w = int(current_width * 0.6)
-            scaled_pix = pixmap.scaled(max_w, 1200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            scaled_pix = pixmap.scaled(limit_width, 10000, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             display_widget.setPixmap(scaled_pix)
             display_widget.setStyleSheet("border-radius: 8px; border: 1px solid #2c313c;")
         else:
@@ -988,17 +987,20 @@ class ChatPage(QWidget):
                 text_content = text_content[:5000] + "\n\n[内容过长已截断...]"
 
             display_widget = QLabel(text_content)
-            display_widget.setWordWrap(True)
-            display_widget.setMinimumWidth(50)
-            display_widget.setMaximumWidth(int(current_width * 0.75))
+            display_widget.setWordWrap(True) 
+
+            display_widget.setMaximumWidth(limit_width)
+            display_widget.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
 
             bg_color = "#2b5278" if is_user else "#2c313c"
             text_color = "#ffffff" if is_user else "#dcdfe4"
+            radius = "12px 2px 12px 12px" if is_user else "2px 12px 12px 12px"
+
             display_widget.setStyleSheet(f"""
                 QLabel {{
                     background-color: {bg_color}; 
                     color: {text_color}; 
-                    border-radius: 12px; 
+                    border-radius: {radius}; 
                     padding: 10px 15px; 
                     font-size: 14px;
                     line-height: 1.4;
@@ -1006,17 +1008,19 @@ class ChatPage(QWidget):
             """)
 
         if is_user:
-            bubble_layout.addStretch()
-            bubble_layout.addWidget(display_widget)
+            row_layout.addStretch(1)
+            row_layout.addWidget(display_widget, 0) 
         else:
-            bubble_layout.addWidget(display_widget)
-            bubble_layout.addStretch()
+            row_layout.addWidget(display_widget, 0) 
+            row_layout.addStretch(1)
 
         count = self.history_layout.count()
         index = max(0, count - 1)
-        self.history_layout.insertWidget(index, bubble)
+        self.history_layout.insertWidget(index, bubble_row)
 
-        bubble.show()
+        bubble_row.show()
+        display_widget.adjustSize() 
+
         QTimer.singleShot(50, self._scroll_to_bottom)
 
     def _scroll_to_bottom(self):
@@ -1158,6 +1162,7 @@ class ChatPage(QWidget):
             QTimer.singleShot(1000, self._final_render_init)
         else:
             logger.error("❌ 网页加载失败，请检查前端服务是否运行在 5173 端口")
+            self._final_render_init()
 
     def _final_render_init(self):
         logger.info("🎨 开始初始化模型和背景渲染...")
