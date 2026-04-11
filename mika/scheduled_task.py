@@ -29,7 +29,7 @@ class IdleController:
 
     async def click_task(self):
         if not self.click_event.set(): return
-        self.text_que.put_nowait((self.flags.session_id,f"【idle lock】使用鼠标点击了你。根据以上信息主动找用户聊天吧！",[],False))
+        self.text_que.put_nowait((self.flags.session_id,f"【idle lock】使用鼠标点击了你。根据以上信息主动找用户聊天吧！",[],[{"idle":"click"}]))
         self.click_event.clear()
 
     async def screen_task(self):
@@ -77,16 +77,14 @@ class IdleController:
                     
                     return base64.b64encode(buffer.getvalue()).decode()
             img_base64 = await loop.run_in_executor(None, _capture_and_encode)
-            self.text_que.put_nowait((self.flags.session_id,f"【idle lock】闲置你挺久了,你已经截取了其鼠标指向的实时屏幕画面：{source_name}。根据以上信息主动找用户聊天吧！",[img_base64],[]))
-            await self.reset()
+            self.text_que.put_nowait((self.flags.session_id,f"【idle lock】闲置你挺久了,你已经截取了其鼠标指向的实时屏幕画面：{source_name}。根据以上信息主动找用户聊天吧！",[img_base64],[{"idle":"screen"}]))
         except Exception as e:
             print(f"screen定时任务出错:{e}")
 
     async def run(self):
-        print("计时任务开始")
         self.is_running=True
         for timer in self.timers:
-            asyncio.create_task(timer.run_timer())
+            timer.start()
 
     async def reset(self):
         for timer in self.timers:

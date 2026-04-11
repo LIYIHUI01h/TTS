@@ -1094,7 +1094,6 @@ class ChatPage(QWidget):
             self.toggle_ex_btn.setStyleSheet("QPushButton { background: #3e4451; color: white; border-radius: 18px; border: 1px solid #565f73; font-size: 20px; } QPushButton:hover { background: #4e5565; border-color: #87CEFA; }")
 
     def on_ex_btn_clicked(self):
-        print(self.forbid_change.is_set(),self.interpt.is_set())
         if self.forbid_change.is_set():
             self.interpt.set()
             self.notify("操作已中止", "warn")

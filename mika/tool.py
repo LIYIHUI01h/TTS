@@ -93,28 +93,45 @@ class MultiTimeParser:
         return parsed_results
 
 class AsyncRandomTimer:
-    def __init__(self,min_seconds,max_seconds,callback):
-        self.min_seconds=min_seconds
-        self.max_seconds=max_seconds
-        self.callback=callback
-        self._task=None
+    def __init__(self, min_seconds, max_seconds, callback):
+        self.min_seconds = min_seconds
+        self.max_seconds = max_seconds
+        self.callback = callback
+        self._task = None
+        self._running = False
 
-    async def run_timer(self):
-        try:
-            wait_time=random.uniform(self.min_seconds,self.max_seconds)
-            await asyncio.sleep(wait_time)
-            
-            if asyncio.iscoroutinefunction(self.callback):await self.callback()
-            else: self.callback()
-        except Exception as e:
-            print(e)
-            pass
-        
-    async def reset(self):
-        if self._task:self._task.cancel()
-        self._task=asyncio.create_task(self.run_timer())
+    async def _loop(self):
+        while self._running:
+            try:
+                wait_time = random.uniform(self.min_seconds, self.max_seconds)
+                await asyncio.sleep(wait_time)
+                
+                if asyncio.iscoroutinefunction(self.callback):
+                    await self.callback()
+                else:
+                    self.callback()
+            except asyncio.CancelledError:
+                break 
+            except Exception as e:
+                print(f"计时器运行出错: {e}")
+
+    def start(self):
+        if not self._running:
+            self._running = True
+            self._task = asyncio.create_task(self._loop())
 
     async def stop(self):
+        self._running = False
         if self._task:
             self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def reset(self):
+        """重置计时器：先停再开"""
+        await self.stop()
+        self.start()
         

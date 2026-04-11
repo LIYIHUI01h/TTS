@@ -51,8 +51,8 @@ async def async_speech_part(window):
     asr=async_speech.SenseVoiceController(log_name="asr",log_path="log/speech.log")
     # llm_api=async_LLM_api(api_key=api_key,log_name="llm",log_path="log/speech.log")
     # pic_llm=async_LLM_api(api_key=api_key,log_name="llm",log_path="log/speech.log",model=SiliconCloud_model["Qwen2-VL-72B"])
-    # tts=async_speech.GPT_SoVITSController(flags.tts_path,log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
-    tts=async_speech.QwenTTSController(flags.tts_path,log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
+    tts=async_speech.GPT_SoVITSController(flags.tts_path,log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
+    # tts=async_speech.QwenTTSController(flags.tts_path,log_name="tts",log_path="log/speech.log",inference_log_path="log/inference.log")
     ap=async_speech.AudioPlayer(log_name="audioplayer",log_path="log/speech.log")
     mm=RAG.MemoryManager(api_key,collection_name=flags.memory_name,log_name="memory",log_path="log/memory.log",model=flags.model_name,user_name=flags.user_name,agent_name=flags.name)
     ia=InteractionAgentController(api_key=api_key,memory_manager=mm,log_path="log/agent.log",log_name="interaction_agent")
@@ -72,7 +72,7 @@ async def async_speech_part(window):
         ]
         if flags.pattern=="live2d": tasks.append(window.page_chat.start_live2d_render())
         await asyncio.gather(*tasks)
-        ws_task = asyncio.create_task(ws.start()) 
+        ws_task = asyncio.create_task(ws.start())
         logger.info("✅ chat界面加载成功")
         optimization_logger.info(f"启动耗时：{time()-start_last:.2f}")
         window.notify("chat界面加载成功")
@@ -119,6 +119,10 @@ async def async_speech_part(window):
 
             message,json_data=await ia.quick_query(query=content,images=images,call_back=call_back)
             if not message:continue
+            elif message=="OUTPUT_FORMAT_ERROR":
+                llm_que.put_nowait((session_id,message,None))
+                window.page_chat.add_chat_item(content=message,is_user=False)
+                continue
             
             optimization_logger.info(f"message检索耗时:{time()-query_last:.2f}")
 
@@ -163,15 +167,19 @@ async def async_speech_part(window):
                 if flag: 
                     date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     date = datetime.strptime(date, "%Y-%m-%d %H:%M:%S")
-                    if llm_json is None:llm_json={"text": llm_res,"mood_change": 0,"special_info": "picture_chat","callback": []}
 
+                    if llm_json is None:llm_json={"text": llm_res,"mood_change": 0,"special_info": "picture_chat","callback": []}
+                    elif "text" not in llm_json:
+                        call_back.append({"output_format_error":llm_json})
+                        text_que.put_nowait((flags.session_id,content,images,call_back))
+                        continue
                     think_back=llm_json.get("think",[])
                     new_call_back=llm_json.get("callback",[])
                     if new_call_back: text_que.put_nowait((flags.session_id,"[__callback__]请根据工具调用结果，主动与用户聊天",[],new_call_back))
                     if think_back:asyncio.create_task(ta.query(think_list=think_back))
                     if not any(key=="think"  for dic in call_back for key in dic):await mm.add_short_memory(content,llm_res,date)
                     window.page_chat.add_chat_item(content=llm_json.get("text",""),is_user=False)
-                    if not call_back and "[__callback__]" not in llm_json["text"]:await mm.add_memory(content,llm_json,date,flags.user_name)
+                    if not call_back and "[__callback__]" not in llm_json.get("text",[]):await mm.add_memory(content,llm_json,date,flags.user_name)
         logger.info("llm任务结束")
 
     async def run_tts():
@@ -292,7 +300,6 @@ async def async_speech_part(window):
 
                     if flags.audioplay_done.is_set():
                         if not timer.is_running: await timer.run()
-                        print(window.page_chat.forbid_change.is_set())
                         window.page_chat.forbid_change.clear()
                         window.page_chat.update_ex_btn_style()
                     await asyncio.sleep(0.5)

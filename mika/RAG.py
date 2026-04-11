@@ -57,7 +57,7 @@ class MemoryManager:
         self.add_insert_num = add_insert_num
         self.user_name = user_name
         self.agent_name = agent_name
-        self.logger = getLogger(log_name=log_name, log_path=log_path, mode='w')
+        self.logger = getLogger(log_name=log_name, log_path=log_path, mode='w',stream=False)
         self.model = model
         self.collection_name = collection_name
         
@@ -141,8 +141,6 @@ class MemoryManager:
         self.db_path = os.path.join(self.base_mem_path, new_collection_name)
         self.short_memory_path = os.path.join(self.db_path, "short_memory.json")
         
-        print(f"DEBUG: 记忆库物理路径切换至 -> {os.path.abspath(self.db_path)}")
-
         if not os.path.exists(self.db_path):
             os.makedirs(self.db_path)
             

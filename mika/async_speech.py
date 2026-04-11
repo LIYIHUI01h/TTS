@@ -725,7 +725,7 @@ class QwenTTSController:
     def __init__(self, json_path, log_path="log/speech.log", log_name=None, inference_log_path=None, base_path="GPT-SoVITS"):
         self.log_path = log_path
         if log_name is None: log_name = "QwenTTSController"
-        
+        self.logger=getLogger(log_name=log_name,log_path=log_path)
         self.api_key = "sk-ed9d05dbcfa64e319d51c78864a77c70" 
         dashscope.api_key = self.api_key
         self.voice = "Cherry"
@@ -734,7 +734,7 @@ class QwenTTSController:
         self.executor = ThreadPoolExecutor(max_workers=5)
 
     async def start_service(self, window):
-        print("正在初始化 Qwen-TTS 服务...")
+        self.logger.info("正在初始化 Qwen-TTS 服务...")
         await self.generate_tts("验证", is_warmup=True)
         return self
 
@@ -780,7 +780,7 @@ class QwenTTSController:
                     wav_file.writeframes(resampled_audio.tobytes())
                 return wav_buffer.getvalue()
         except Exception as e:
-            print(f"Sync process error: {e}")
+            self.logger.error(f"语音合成出错: {e}")
             return None
 
     async def generate_tts(self, text, text_lang="auto", is_warmup=False):
@@ -795,14 +795,14 @@ class QwenTTSController:
             )
 
             if full_wav_bytes and not is_warmup:
-                print(f"✅ 合成成功 | 总耗时: {time.time()-t0:.2f}s")
+                self.logger.info(f"✅ 合成成功 | 总耗时: {time.time()-t0:.2f}s")
 
             return full_wav_bytes
 
         except Exception as e:
-            print(f"Qwen-TTS 异常: {repr(e)}")
+            self.logger.info(f"Qwen-TTS 异常: {repr(e)}")
             return None
 
     async def release(self):
         self.executor.shutdown(wait=True)
-        print("Qwen-TTS 资源已释放")
+        self.logger.info("Qwen-TTS 资源已释放")

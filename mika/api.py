@@ -84,7 +84,6 @@ class async_LLM_api:
                                 elif char in weak_splits and len(text_buffer.strip())>=min_length and weak_split:
                                     yield "text",text_buffer.strip()
                                     text_buffer=""
-                        await asyncio.sleep(0.1)
                     if ff:yield "interpt", None
                     elif isinstance(buffer, str):
                         # buffer=buffer.replace('“','"').replace('：',':').replace("’","'").replace('”','"').replace("‘","'")

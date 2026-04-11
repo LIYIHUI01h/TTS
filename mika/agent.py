@@ -11,6 +11,7 @@ import ctypes.wintypes
 from PIL import Image
 import win32process
 from mika.api import * 
+from pypinyin import lazy_pinyin
 from mika.tool import getLogger
 from ddgs import DDGS
 
@@ -23,50 +24,84 @@ from ddgs import DDGS
 #         pass
 
 class BaseSkills:
+    CITY_MAP = {
+        "北京": "Beijing",
+        "上海": "Shanghai",
+        "广州": "Guangzhou",
+        "深圳": "Shenzhen",
+        "杭州": "Hangzhou",
+        "成都": "Chengdu",
+        "南京": "Nanjing",
+        "武汉": "Wuhan",
+        "西安": "Xian",
+        "香港": "Hong-Kong",
+        "台北": "Taipei",
+        "东京": "Tokyo",
+        "伦敦": "London",
+        "纽约": "New-York"
+    }
+
     def __init__(self,log_path="log/agent.log",log_name="agent"):
         self.weather_client = httpx.AsyncClient(timeout=10.0, trust_env=False)
         self.logger=getLogger(log_path=log_path,log_name=log_name,mode='w',stream=False)
         self.last_search={}
         self.max_search_time=0
 
-    async def weather_skill(self, query=None):
-        url = "https://wttr.in/?format=j1&lang=zh"
+    async def weather_skill(self, city_queries=["北京", "上海", "本地"]):
+        tasks = []
+        target_cities = []
+
+        for query in city_queries:
+            if query == "本地" or query == "local":
+                target_cities.append("本地")
+                tasks.append(self.weather_client.get("https://wttr.in/?format=j1&lang=zh"))
+            else:
+                eng_name = self.CITY_MAP.get(query)
+                if not eng_name:
+                    eng_name = "".join(lazy_pinyin(query))
+                
+                target_cities.append(query)
+                url = f"https://wttr.in/{eng_name}?format=j1&lang=zh"
+                tasks.append(self.weather_client.get(url))
+
         try:
-            resp = await self.weather_client.get(url)
-            if resp.status_code != 200:
-                self.logger.error(f"weatherskill: wttr.in 返回状态码 {resp.status_code}")
-                return []
-            data = resp.json()
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            weather_reports = []
 
-            area = data['nearest_area'][0]['areaName'][0]['value']
-            region = data['nearest_area'][0]['region'][0]['value']
+            for i, resp in enumerate(responses):
+                original_input = target_cities[i]
+                
+                if isinstance(resp, Exception) or resp.status_code != 200:
+                    self.logger.error(f"无法查询地区：{original_input}")
+                    weather_reports.append(f"【{original_input}】：无法查询到该地区天气（请检查名称是否正确）")
+                    continue
 
-            curr = data['current_condition'][0]
-            curr_temp = curr['temp_C']
-            curr_desc = curr['lang_zh'][0]['value']
-            humidity = curr['humidity']
+                try:
+                    data = resp.json()
+                    curr = data['current_condition'][0]
+                    curr_temp = curr['temp_C']
+                    curr_desc = curr['lang_zh'][0]['value']
+                    
+                    report = f"【{original_input}】: {curr_desc}, 气温 {curr_temp}°C, 湿度 {curr['humidity']}%"
+                    weather_reports.append(report)
+                except (KeyError, IndexError):
+                    weather_reports.append(f"【{original_input}】：数据解析异常")
 
-            tomorrow = data['weather'][1]
-            t_date = tomorrow['date']
-            t_max = tomorrow['maxtempC']
-            t_min = tomorrow['mintempC']
-            t_desc = tomorrow['hourly'][4]['lang_zh'][0]['value']
-
+            # 汇总注入 Prompt
+            combined_reports = "\n".join(weather_reports)
             weather_context = f"""
-                [__weather__]### [实时环境感知数据]
-                当前定位：中国 {region} {area}
-                【今日实时】{curr_desc}，气温 {curr_temp}°C，湿度 {humidity}%，风速 {curr['windspeedKmph']}km/h
-                【明日预报】({t_date})：{t_desc}，气温区间 {t_min}°C ~ {t_max}°C
-                你暂时只支持本地天气查询，如果用户让你查询别处的天气，告诉他你的功能暂时只支持本地天气查询
-                --- 
+                [__weather__]### [多地区环境感知数据]
+                {combined_reports}
+                ---
+                提示：你已获取上述地区的实时天气。若用户询问名单外的城市，请告知需确保名称准确。
             """
-
-            self.logger.info(f"本地天气查询结果：{weather_context}")
+            
+            self.logger.info(f"多地区天气感知完成: {target_cities}")
             return [{"role": "system", "content": weather_context}]
 
         except Exception as e:
-            self.logger.error(f"⚠️ Weather Skill 运行异常: {e}")
-            return [{"role": "system", "content": "[__weather__]天气查询功能异常"}]
+            self.logger.error(f"Weather Skill 严重故障: {e}")
+            return [{"role": "system", "content": "[__weather__]天气服务暂时不可用"}]
         
     async def search_skill(self, keywords_list,is_search=False):
         if not keywords_list: return []
@@ -208,6 +243,7 @@ class BaseSkills:
 class InteractionAgentController(BaseSkills):
     def __init__(self,api_key,memory_manager=None,think_agent=None,log_path="log/agent.log",log_name="interaction_agent"):
         super().__init__(log_path,log_name)
+        self.output_format_error_cnt=0
         self.think_agent=think_agent
         self.mm=memory_manager
         self.SYSTEM_PROMPT=None
@@ -240,14 +276,21 @@ class InteractionAgentController(BaseSkills):
 
         json_data=(len(images)==0)
         tasks = []
+        output_format_error=None
         for task in call_back:
-            for key,value in task.items():
-                if key=="search" and value: tasks.append(self.search_skill(value))
-                elif key=="weather" and value:tasks.append(self.weather_skill(value))
-                elif key=="digital_vision" and value:
-                    json_data=False
-                    tasks.append(self.digital_vision_skill())
-                # elif key=="think" and value:
+            try:
+                for key,value in task.items():
+                    if key=="search" and value: tasks.append(self.search_skill(value))
+                    elif key=="weather" and value:tasks.append(self.weather_skill(value))
+                    elif key=="digital_vision" and value:
+                        json_data=False
+                        tasks.append(self.digital_vision_skill())
+                    elif key=="output_format_error":output_format_error=value
+            except Exception as e:
+                self.logger.error(f"{task},agent收到回调格式错误:{e}")
+
+        if output_format_error and self.output_format_error_cnt>=3:return "OUTPUT_FORMAT_ERROR",None
+        elif output_format_error:self.output_format_error_cnt+=1
 
         if tasks:
             self.logger.info(f"🛠️ 正在执行并行任务，任务数: {len(tasks)}")
@@ -262,6 +305,8 @@ class InteractionAgentController(BaseSkills):
 
         for ques,res,date in list(self.mm.short_memory_que._queue):
             message.extend([{"role":"user","content":ques},{"role":"assistant","content":res}])
+
+        if output_format_error:message.append({"role": "system", "content": f"这是你之前的回复:{output_format_error},没有'text'字段，请认真遵循输出规范，可以仔细思考后回复"})
 
         if not images:
             message.append({"role": "user", "content": current_text})
@@ -334,7 +379,7 @@ class ThinkAgentController(BaseSkills):
 
         half_think=await self.llm_api.start_nostream_json(message)
         self.logger.info(f"大闹思考结果:{half_think}")
-        self.text_que.put_nowait((self.flags.session_id,"[__half_think__]请根据初步思考结果，判断是保持沉默，还是告诉用户自己已经在安排了，或是先聊些别的话题",[],[{"half_think":[]}]))
+        # self.text_que.put_nowait((self.flags.session_id,"[__half_think__]请根据初步思考结果，判断是保持沉默，还是告诉用户自己已经在安排了，或是先聊些别的话题",[],[{"half_think":[]}]))
 
         interaction_messages=[]
         tasks=[]
