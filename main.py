@@ -3,7 +3,7 @@ import json
 import asyncio
 from time import time
 from queue import Queue
-from UI.UI import MyWindow
+from UI import MyWindow
 from qasync import QEventLoop
 from datetime import datetime
 from mika import async_speech,RAG

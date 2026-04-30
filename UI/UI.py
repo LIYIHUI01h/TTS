@@ -29,10 +29,17 @@ from mika.api import SiliconCloud_model
 from PySide6.QtCore import QProcess, QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtCore import QAbstractAnimation, QBuffer, QEvent, QEasingCurve, QIODevice, QMimeData, QParallelAnimationGroup, QPointF, QSettings, QTimer, QUrl, Qt, QPropertyAnimation, QPoint, QRect, QSize, QVariantAnimation, Signal
-from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QIcon, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShowEvent, QTextCursor,QPixmap
+from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QIcon, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QTextCursor
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QGraphicsProxyWidget, QGraphicsScene, QGraphicsView, QGridLayout, QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QScrollArea, QSizeGrip, QPushButton, QSizePolicy, QSlider, QSplitter, QStackedLayout, QStackedWidget, QTextEdit, QTreeWidget, QTreeWidgetItem, QWidget
 from qasync import QEventLoop, asyncSlot
-from UI.main_ui import QFrame, QHBoxLayout, QLabel, QVBoxLayout, Ui_MainWindow 
+from UI.main_ui import QFrame, QHBoxLayout, QLabel, QVBoxLayout, Ui_MainWindow
+from UI.home import HomePage as HomePageNew
+from UI.chat import ChatPage as ChatPageNew
+from UI.setting import SettingPage as SettingPageNew
+from UI.monitor import MonitorPage as MonitorPageNew
+from UI.log import LogPage as LogPageNew
+from UI.memory import MemoryPage as MemoryPageNew
+from UI.widgets import ToastNotification as ToastNotificationNew, ShimmerOverlay as ShimmerOverlayNew
 from llama_index.core.schema import TextNode
 
 logger=getLogger(log_path="log/UI.log",log_name="UI",mode='w')
@@ -1745,7 +1752,7 @@ class SettingPage(BasePage):
         bgs = [f for f in os.listdir(self.base_bg_path) if f.lower().endswith(valid_exts)]
         return bgs if bgs else ["bk4.png"]
 
-    def showEvent(self, event: QShowEvent):
+    def showEvent(self, event):
         super().showEvent(event)
         self.load_config_from_file()
         self.live2d_model_combo.clear()
@@ -2685,20 +2692,20 @@ class MyWindow(QMainWindow, Ui_MainWindow):
         self.move(30, 30)
         self.dragPos = QPoint()
 
-        self.btn_menu.overlay = ShimmerOverlay(self.btn_menu)
+        self.btn_menu.overlay = ShimmerOverlayNew(self.btn_menu)
         self.btn_menu.clicked.connect(self.btn_menu.overlay.play)
 
         menu_btns = [self.btn_home, self.btn_chat, self.btn_setting, self.btn_monitor, self.btn_log,self.btn_memory]
         for i, btn in enumerate(menu_btns):
-            btn.overlay = ShimmerOverlay(btn)
+            btn.overlay = ShimmerOverlayNew(btn)
             btn.clicked.connect(lambda checked=False, b=btn, index=i: self.apply_blue_shimmer(b, index))
 
-        self.page_home = HomePage(flags)
-        self.page_monitor = MonitorPage(flags)
-        self.page_log = LogPage(flags)
-        self.page_chat = ChatPage(flags)
-        self.page_setting = SettingPage(flags,self.page_chat)
-        self.page_memory=MemoryPage(flags)
+        self.page_home = HomePageNew(flags)
+        self.page_monitor = MonitorPageNew(flags)
+        self.page_log = LogPageNew(flags)
+        self.page_chat = ChatPageNew(flags)
+        self.page_setting = SettingPageNew(flags,self.page_chat)
+        self.page_memory = MemoryPageNew(flags)
 
         while self.stackedWidget.count() > 0:
             self.stackedWidget.removeWidget(self.stackedWidget.widget(0))
@@ -2773,4 +2780,4 @@ class MyWindow(QMainWindow, Ui_MainWindow):
             "warn": "#ffb86c",
             "error": "#ff5555"
         }
-        ToastNotification(self, message, colors.get(level, "#87CEFA"))
+        ToastNotificationNew(self, message, colors.get(level, "#87CEFA"))
